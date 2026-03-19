@@ -16,8 +16,17 @@ async function getAccessToken() {
       return tokenCache.accessToken;
     }
 
-    if (!fs.existsSync(TOKEN_FILE)) return null;
-    const refreshToken = fs.readFileSync(TOKEN_FILE, 'utf8');
+    // Cek Environment Variables (Utama untuk Vercel)
+    let refreshToken = process.env.SPOTIFY_REFRESH_TOKEN;
+
+    // Jika tidak ada di ENV, coba baca dari file (Lokal)
+    if (!refreshToken) {
+      if (fs.existsSync(TOKEN_FILE)) {
+        refreshToken = fs.readFileSync(TOKEN_FILE, 'utf8');
+      }
+    }
+
+    if (!refreshToken) return null;
 
     const response = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
