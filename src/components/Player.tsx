@@ -71,6 +71,30 @@ export default function Player() {
     );
   }
 
+  const handleControl = async (action: string, value?: number) => {
+    try {
+      await fetch("/api/spotify/control", {
+        method: "POST",
+        body: JSON.stringify({ action, value }),
+      });
+      // Refresh data after small delay
+      setTimeout(() => {
+        const fetchNowPlaying = async () => {
+          try {
+            const res = await fetch("/api/spotify/now-playing");
+            if (res.ok) {
+              const json = await res.json();
+              setData(json);
+            }
+          } catch (e) {}
+        };
+        fetchNowPlaying();
+      }, 500);
+    } catch (error) {
+      console.error("Control error:", error);
+    }
+  };
+
   const progressPercent = data?.isPlaying ? (data.progressMs / data.durationMs) * 100 : 0;
 
   return (
@@ -93,7 +117,7 @@ export default function Player() {
       <div className="z-10 w-full max-w-md flex flex-col items-center">
         {/* Top bar */}
         <div className="w-full flex justify-between items-center mb-10">
-          <span className="text-xs font-bold tracking-widest text-[#1DB954] uppercase">Live Web Player</span>
+          <span className="text-xs font-bold tracking-widest text-[#1DB954] uppercase">Vantara Live Player</span>
           <button
             onClick={() => signOut()}
             className="text-xs font-medium text-gray-400 hover:text-white transition-colors"
@@ -102,10 +126,10 @@ export default function Player() {
           </button>
         </div>
 
-        {data?.isPlaying ? (
+        {data?.isPlaying || (data && !data.isPlaying) ? (
           <div className="w-full flex flex-col items-center transition-all duration-700">
             {/* Album Cover */}
-            <div className="w-full max-w-[280px] sm:max-w-[320px] aspect-square rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] overflow-hidden mb-8 relative group">
+            <div className={`w-full max-w-[280px] sm:max-w-[320px] aspect-square rounded-xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.8)] overflow-hidden mb-8 relative group ${!data.isPlaying ? 'opacity-50 grayscale-[0.5]' : ''}`}>
               <img
                 src={data.albumImageUrl}
                 alt={data.album}
@@ -127,42 +151,66 @@ export default function Player() {
                 </div>
                 
                 {/* Visualizer bars */}
-                <div className="flex items-end space-x-1 h-6 pb-1.5 opacity-80">
-                  <div className="w-1 bg-[#1DB954] animate-[bounce_1s_infinite_ease-in-out] origin-bottom h-full" style={{ animationDelay: '0s' }}></div>
-                  <div className="w-1 bg-[#1DB954] animate-[bounce_1s_infinite_ease-in-out] origin-bottom h-[60%]" style={{ animationDelay: '0.2s' }}></div>
-                  <div className="w-1 bg-[#1DB954] animate-[bounce_1s_infinite_ease-in-out] origin-bottom h-[80%]" style={{ animationDelay: '0.4s' }}></div>
-                </div>
+                {data.isPlaying && (
+                  <div className="flex items-end space-x-1 h-6 pb-1.5 opacity-80">
+                    <div className="w-1 bg-[#1DB954] animate-[bounce_1s_infinite_ease-in-out] origin-bottom h-full" style={{ animationDelay: '0s' }}></div>
+                    <div className="w-1 bg-[#1DB954] animate-[bounce_1s_infinite_ease-in-out] origin-bottom h-[60%]" style={{ animationDelay: '0.2s' }}></div>
+                    <div className="w-1 bg-[#1DB954] animate-[bounce_1s_infinite_ease-in-out] origin-bottom h-[80%]" style={{ animationDelay: '0.4s' }}></div>
+                  </div>
+                )}
             </div>
 
-            {/* Progress Bar Container */}
-            <div className="w-full mb-10">
-              <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden relative">
-                 {/* Progress fill */}
-                <div
-                  className="absolute top-0 left-0 h-full bg-white rounded-full transition-all duration-1000 ease-linear"
-                  style={{ width: `${progressPercent}%` }}
-                />
-              </div>
+            {/* Progress Bar & Seek */}
+            <div className="w-full mb-8">
+              <input
+                type="range"
+                min="0"
+                max={data.durationMs}
+                value={data.progressMs}
+                onChange={(e) => handleControl("seek", parseInt(e.target.value))}
+                className="w-full h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-white"
+                title="Seek"
+              />
               <div className="flex justify-between text-xs text-gray-400 mt-2 font-medium">
                 <span>{formatTime(data.progressMs)}</span>
                 <span>{formatTime(data.durationMs)}</span>
               </div>
             </div>
 
-            {/* Playback Controls (Aesthetic) */}
-            <div className="flex items-center justify-center space-x-8">
-               <button className="text-gray-300 hover:text-white transition-colors">
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M11.5 12l8.5 6V6l-8.5 6zM4 6h2v12H4z"/></svg>
+            {/* Playback Controls */}
+            <div className="flex items-center justify-center space-x-8 mb-8">
+               <button onClick={() => handleControl("previous")} className="text-gray-300 hover:text-white transition-colors">
+                  <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M11.5 12l8.5 6V6l-8.5 6zM4 6h2v12H4z"/></svg>
                </button>
                
-               <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-105 transition-transform cursor-pointer text-black">
-                 {/* Pause icon since it's playing */}
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-               </div>
-               
-               <button className="text-gray-300 hover:text-white transition-colors">
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12.5 12l-8.5-6v12l8.5-6zM20 6h-2v12h2z"/></svg>
+               <button 
+                  onClick={() => handleControl(data.isPlaying ? "pause" : "play")}
+                  className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-105 transition-transform cursor-pointer text-black"
+               >
+                  {data.isPlaying ? (
+                    <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                  ) : (
+                    <svg className="w-8 h-8 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                  )}
                </button>
+               
+               <button onClick={() => handleControl("next")} className="text-gray-300 hover:text-white transition-colors">
+                  <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M12.5 12l-8.5-6v12l8.5-6zM20 6h-2v12h2z"/></svg>
+               </button>
+            </div>
+
+            {/* Volume Control */}
+            <div className="w-full max-w-[200px] flex items-center space-x-3 bg-white/5 py-2 px-4 rounded-full border border-white/5">
+               <svg className="w-4 h-4 text-gray-400" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+               <input
+                type="range"
+                min="0"
+                max="100"
+                defaultValue="50"
+                onChange={(e) => handleControl("volume", parseInt(e.target.value))}
+                className="w-full h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-green-500"
+                title="Volume"
+              />
             </div>
           </div>
         ) : (
