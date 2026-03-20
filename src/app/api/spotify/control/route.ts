@@ -4,10 +4,19 @@ import { authOptions } from '@/lib/auth';
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  
+  if (!session) {
+    console.error("DEBUG: No session found for control request!");
+    return NextResponse.json({ error: 'Unauthorized - No session found. Please re-login.' }, { status: 401 });
+  }
 
   const { action, value } = await req.json();
   const accessToken = (session as any).accessToken;
+
+  if (!accessToken) {
+    console.error("DEBUG: No accessToken found in session!");
+    return NextResponse.json({ error: 'Unauthorized - No access token' }, { status: 401 });
+  }
 
   let url = 'https://api.spotify.com/v1/me/player/';
   let method = 'POST';
