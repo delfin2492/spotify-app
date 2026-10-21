@@ -22,7 +22,37 @@ export async function GET(req: Request) {
         return NextResponse.json({ error: 'Failed to fetch playlist' }, { status: res.status });
       }
       const data = await res.json();
-      return NextResponse.json(data);
+
+      // Spotify 2026 API compatibility: normalize `items` / `tracks` and `item.item` / `item.track`
+      let rawItems = data.tracks?.items || data.items?.items || [];
+      if (rawItems.length === 0) {
+        const itemsRes = await fetch(
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items?limit=50`,
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: 'no-store',
+          }
+        );
+        if (itemsRes.ok) {
+          const itemsData = await itemsRes.json();
+          rawItems = itemsData.items || [];
+        }
+      }
+
+      const normalizedItems = rawItems
+        .map((entry: any) => ({
+          ...entry,
+          track: entry.track || entry.item || null,
+        }))
+        .filter((entry: any) => entry.track);
+
+      return NextResponse.json({
+        ...data,
+        tracks: {
+          total: data.tracks?.total ?? data.items?.total ?? normalizedItems.length,
+          items: normalizedItems,
+        },
+      });
     }
 
     if (albumId) {
@@ -48,7 +78,11 @@ export async function GET(req: Request) {
     }
 
     const data = await res.json();
-    return NextResponse.json({ items: data.items || [] });
+    const normalizedPlaylists = (data.items || []).map((pl: any) => ({
+      ...pl,
+      tracks: pl.tracks || pl.items || { total: 0 },
+    }));
+    return NextResponse.json({ items: normalizedPlaylists });
   } catch (error) {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
@@ -65,45 +99,95 @@ export async function POST(req: Request) {
     const { action, name, description, isPublic, playlistId, uris } = body;
 
     if (action === 'create') {
-      // Get current user ID first
-      const meRes = await fetch('https://api.spotify.com/v1/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
+      const payload = JSON.stringify({
+        name: name || 'Playlist Baru',
+        description: description || 'Dibuat dari Vantara Music Platform',
+        public: isPublic ?? false,
       });
-      if (!meRes.ok) {
-        return NextResponse.json({ error: 'Failed to fetch user profile' }, { status: meRes.status });
-      }
-      const me = await meRes.json();
 
-      const createRes = await fetch(`https://api.spotify.com/v1/users/${encodeURIComponent(me.id)}/playlists`, {
+      // Spotify 2026 API: Use POST /v1/me/playlists instead of deprecated /v1/users/{id}/playlists
+      let createRes = await fetch('https://api.spotify.com/v1/me/playlists', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          name: name || 'Playlist Baru',
-          description: description || 'Dibuat dari Vantara Music Platform',
-          public: isPublic ?? false,
-        }),
+        body: payload,
       });
 
-      const created = await createRes.json();
+      // Fallback if needed
+      if (createRes.status === 404 || createRes.status === 405) {
+        const meRes = await fetch('https://api.spotify.com/v1/me', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (meRes.ok) {
+          const me = await meRes.json();
+          createRes = await fetch(
+            `https://api.spotify.com/v1/users/${encodeURIComponent(me.id)}/playlists`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: payload,
+            }
+          );
+        }
+      }
+
+      const text = await createRes.text();
+      let created: any = {};
+      try {
+        created = JSON.parse(text);
+      } catch {
+        created = { message: text };
+      }
+
+      if (!createRes.ok) {
+        console.error('Create playlist failed:', createRes.status, text);
+      }
+
       return NextResponse.json(created, { status: createRes.status });
     }
 
     if (action === 'add-tracks' && playlistId && uris) {
-      const addRes = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          uris: Array.isArray(uris) ? uris : [uris],
-        }),
-      });
+      const uriList = Array.isArray(uris) ? uris : [uris];
 
-      const added = await addRes.json();
+      // Spotify 2026 API: Try /items first, then fallback to /tracks
+      let addRes = await fetch(
+        `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ uris: uriList }),
+        }
+      );
+
+      if (!addRes.ok) {
+        addRes = await fetch(
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ uris: uriList }),
+          }
+        );
+      }
+
+      const text = await addRes.text();
+      let added: any = {};
+      try {
+        added = JSON.parse(text);
+      } catch {
+        added = { message: text };
+      }
       return NextResponse.json(added, { status: addRes.status });
     }
 
@@ -127,18 +211,45 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'Missing playlistId or uri' }, { status: 400 });
     }
 
-    const delRes = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        tracks: [{ uri }],
-      }),
-    });
+    // Spotify 2026 API: Try /items first, then fallback to /tracks
+    let delRes = await fetch(
+      `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tracks: [{ uri }],
+          items: [{ uri }],
+        }),
+      }
+    );
 
-    const data = await delRes.json();
+    if (!delRes.ok) {
+      delRes = await fetch(
+        `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`,
+        {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tracks: [{ uri }],
+          }),
+        }
+      );
+    }
+
+    const text = await delRes.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { message: text };
+    }
     return NextResponse.json(data, { status: delRes.status });
   } catch (error) {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

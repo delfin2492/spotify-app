@@ -299,10 +299,17 @@ export default function Player() {
     const handler = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const res = await fetch(`/api/spotify/search?q=${encodeURIComponent(searchQuery)}&limit=16`);
+        const res = await fetch(`/api/spotify/search?q=${encodeURIComponent(searchQuery)}&limit=10`);
         if (res.ok) {
           const json = await res.json();
-          setSearchResults(json);
+          setSearchResults({
+            tracks: json.tracks || [],
+            artists: json.artists || [],
+            albums: json.albums || [],
+            playlists: json.playlists || [],
+          });
+        } else {
+          showToast("Gagal mencari lagu. Coba klik Keluar lalu Masuk kembali.", "error");
         }
       } catch (e) {
         console.error("Search error", e);

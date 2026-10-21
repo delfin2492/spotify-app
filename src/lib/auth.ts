@@ -65,13 +65,21 @@ export const authOptions: AuthOptions = {
     SpotifyProvider({
       clientId: process.env.SPOTIFY_CLIENT_ID as string,
       clientSecret: process.env.SPOTIFY_CLIENT_SECRET as string,
-      authorization: { params: { scope: scopes } },
+      authorization: {
+        url: "https://accounts.spotify.com/authorize",
+        params: {
+          scope: scopes,
+          show_dialog: "true",
+        },
+      },
     }),
   ],
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
     async jwt({ token, account, user }) {
       if (account && user) {
+        tokenCache.accessToken = account.access_token ?? null;
+        tokenCache.expiresAt = (account.expires_at ?? 0) * 1000;
         return {
           ...token,
           accessToken: account.access_token,
@@ -104,6 +112,8 @@ export const authOptions: AuthOptions = {
 export async function getValidAccessToken(): Promise<string | null> {
   const session = (await getServerSession(authOptions)) as any;
   if (session?.accessToken && !session?.error) {
+    tokenCache.accessToken = session.accessToken;
+    tokenCache.expiresAt = Date.now() + 30 * 60 * 1000;
     return session.accessToken;
   }
 
