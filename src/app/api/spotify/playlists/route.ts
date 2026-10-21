@@ -11,6 +11,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const playlistId = searchParams.get('id');
   const albumId = searchParams.get('albumId');
+  const mode = searchParams.get('mode');
 
   try {
     if (playlistId) {
@@ -78,10 +79,17 @@ export async function GET(req: Request) {
     }
 
     const data = await res.json();
-    const normalizedPlaylists = (data.items || []).map((pl: any) => ({
+    let normalizedPlaylists = (data.items || []).map((pl: any) => ({
       ...pl,
       tracks: pl.tracks || pl.items || { total: 0 },
     }));
+
+    if (mode === 'geolab') {
+      normalizedPlaylists = normalizedPlaylists.filter((pl: any) =>
+        (pl.name || '').toLowerCase().includes('geolab')
+      );
+    }
+
     return NextResponse.json({ items: normalizedPlaylists });
   } catch (error) {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

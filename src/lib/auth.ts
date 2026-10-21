@@ -113,21 +113,31 @@ export async function getValidAccessToken(): Promise<string | null> {
   const session = (await getServerSession(authOptions)) as any;
   if (session?.accessToken && !session?.error) {
     tokenCache.accessToken = session.accessToken;
+    if (session?.refreshToken) {
+      tokenCache.refreshToken = session.refreshToken;
+    }
     tokenCache.expiresAt = Date.now() + 30 * 60 * 1000;
     return session.accessToken;
   }
 
-  // Fallback ke SPOTIFY_REFRESH_TOKEN dari env atau file lokal jika sesi bermasalah
+  // Fallback untuk perangkat yang login menggunakan PIN (tanpa sesi OAuth di browser tersebut)
   try {
     if (tokenCache.accessToken && Date.now() < tokenCache.expiresAt - 60000) {
       return tokenCache.accessToken;
     }
 
-    let refreshToken = session?.refreshToken || process.env.SPOTIFY_REFRESH_TOKEN;
+    let refreshToken =
+      session?.refreshToken ||
+      tokenCache.refreshToken ||
+      process.env.SPOTIFY_REFRESH_TOKEN;
+
     if (!refreshToken) {
-      const tokenFile = path.join(process.cwd(), ".spotify-token");
-      if (fs.existsSync(tokenFile)) {
-        refreshToken = fs.readFileSync(tokenFile, "utf8").trim();
+      const tmpFile = "/tmp/.spotify-token";
+      const localFile = path.join(process.cwd(), ".spotify-token");
+      if (fs.existsSync(tmpFile)) {
+        refreshToken = fs.readFileSync(tmpFile, "utf8").trim();
+      } else if (fs.existsSync(localFile)) {
+        refreshToken = fs.readFileSync(localFile, "utf8").trim();
       }
     }
 
@@ -136,6 +146,7 @@ export async function getValidAccessToken(): Promise<string | null> {
     const refreshed = await refreshAccessToken({ refreshToken });
     if (refreshed.accessToken) {
       tokenCache.accessToken = refreshed.accessToken;
+      tokenCache.refreshToken = refreshed.refreshToken || refreshToken;
       tokenCache.expiresAt = (refreshed.expiresAt as number) * 1000;
       return refreshed.accessToken;
     }

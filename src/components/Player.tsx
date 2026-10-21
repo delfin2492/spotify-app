@@ -33,6 +33,13 @@ type ActiveTab = "home" | "search" | "liked" | "queue" | "playlist" | "album" | 
 export default function Player() {
   const { data: session, status } = useSession();
 
+  // PIN Auth State (PIN: 2016 -> Mode GeoLab)
+  const [pinAuthenticated, setPinAuthenticated] = useState<boolean>(false);
+  const [authMode, setAuthMode] = useState<"geolab" | "admin">("geolab");
+  const [pinInput, setPinInput] = useState<string>("");
+  const [pinError, setPinError] = useState<string>("");
+  const [checkingPinStorage, setCheckingPinStorage] = useState<boolean>(true);
+
   // Playback State
   const [data, setData] = useState<NowPlaying | null>(null);
   const [localProgress, setLocalProgress] = useState<number>(0);
@@ -111,18 +118,26 @@ export default function Player() {
     }
   }, [isSeeking]);
 
-  // Fetch User Playlists
+  // Fetch User Playlists (Filtered to GeoLab only when in PIN / GeoLab mode)
   const fetchPlaylists = useCallback(async () => {
     try {
-      const res = await fetch("/api/spotify/playlists");
+      const query = authMode === "geolab" ? "?mode=geolab" : "";
+      const res = await fetch(`/api/spotify/playlists${query}`);
       if (res.ok) {
         const json = await res.json();
-        setPlaylists(json.items || []);
+        const rawList = json.items || [];
+        if (authMode === "geolab") {
+          setPlaylists(
+            rawList.filter((pl: any) => (pl.name || "").toLowerCase().includes("geolab"))
+          );
+        } else {
+          setPlaylists(rawList);
+        }
       }
     } catch (e) {
       console.error("Failed to fetch playlists", e);
     }
-  }, []);
+  }, [authMode]);
 
   // Fetch Home Data & Initialize Web Playback SDK
   const fetchHomeAndInitSdk = useCallback(async () => {
@@ -256,16 +271,31 @@ export default function Player() {
     playerRef.current = player;
   };
 
-  // Initial Load & Polling
+  // Check stored PIN session on mount
   useEffect(() => {
-    if (!session) return;
+    if (typeof window !== "undefined") {
+      const savedPin = localStorage.getItem("vantara_pin_auth");
+      const savedMode = localStorage.getItem("vantara_auth_mode");
+      if (savedPin === "2016") {
+        setPinAuthenticated(true);
+        setAuthMode("geolab");
+      } else if (savedMode === "admin") {
+        setAuthMode("admin");
+      }
+      setCheckingPinStorage(false);
+    }
+  }, []);
 
-    if ((session as any).refreshToken) {
+  // Initial Load & Polling (works with PIN login OR Spotify session)
+  useEffect(() => {
+    if (session && (session as any).refreshToken) {
       fetch("/api/spotify/register-token", {
         method: "POST",
         body: JSON.stringify({ refreshToken: (session as any).refreshToken }),
       });
     }
+
+    if (!pinAuthenticated && !session) return;
 
     fetchNowPlaying();
     fetchPlaylists();
@@ -274,7 +304,7 @@ export default function Player() {
 
     const interval = setInterval(fetchNowPlaying, 3000);
     return () => clearInterval(interval);
-  }, [session, fetchNowPlaying, fetchPlaylists, fetchHomeAndInitSdk, fetchDevices]);
+  }, [pinAuthenticated, session, fetchNowPlaying, fetchPlaylists, fetchHomeAndInitSdk, fetchDevices]);
 
   // Smooth 1-second local progress bar timer when playing
   useEffect(() => {
@@ -323,10 +353,10 @@ export default function Player() {
 
   // Load Tab Specific Data
   useEffect(() => {
-    if (!session) return;
+    if (!pinAuthenticated && !session) return;
     if (activeTab === "queue") fetchQueue();
     if (activeTab === "liked") fetchLikedSongs();
-  }, [activeTab, session, fetchQueue, fetchLikedSongs]);
+  }, [activeTab, pinAuthenticated, session, fetchQueue, fetchLikedSongs]);
 
   // Unified Playback Control Handler
   const handleControl = async (
@@ -552,7 +582,61 @@ export default function Player() {
     handleControl("repeat", { value: nextState });
   };
 
-  if (status === "loading") {
+  // Handle PIN 2016 Login
+  const handlePinLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pinInput.trim() === "2016") {
+      localStorage.setItem("vantara_pin_auth", "2016");
+      localStorage.setItem("vantara_auth_mode", "geolab");
+      setAuthMode("geolab");
+      setPinAuthenticated(true);
+      setPinError("");
+      setPinInput("");
+    } else {
+      setPinError("Kode PIN salah! Silakan coba lagi.");
+    }
+  };
+
+  // Handle Logout (clears PIN session and returns to PIN Login screen)
+  const handleLogout = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("vantara_pin_auth");
+      localStorage.removeItem("vantara_auth_mode");
+    }
+    setPinAuthenticated(false);
+    setPinInput("");
+    if (session && authMode === "admin") {
+      signOut({ redirect: false });
+    }
+  };
+
+  // Helper to quickly initialize GeoLab playlist if not found
+  const handleInitGeoLabPlaylist = async () => {
+    try {
+      const res = await fetch("/api/spotify/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create",
+          name: "GeoLab",
+          description: "Playlist Resmi GeoLab - Vantara Music Platform",
+          isPublic: false,
+        }),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        showToast('Playlist "GeoLab" berhasil dibuat!', "success");
+        fetchPlaylists();
+        if (created.id) openPlaylist(created.id);
+      } else {
+        showToast("Gagal membuat playlist GeoLab. Pastikan Admin sudah login Spotify sekali.", "error");
+      }
+    } catch {
+      showToast("Gagal membuat playlist GeoLab", "error");
+    }
+  };
+
+  if (status === "loading" || checkingPinStorage) {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-[#09090b] text-white">
         <div className="w-12 h-12 border-4 border-t-[#1DB954] border-zinc-800 rounded-full animate-spin"></div>
@@ -560,26 +644,75 @@ export default function Player() {
     );
   }
 
-  if (!session) {
+  if (!pinAuthenticated) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[100dvh] bg-gradient-to-b from-[#121212] to-black text-white p-6">
-        <div className="w-20 h-20 mb-6 bg-[#1DB954] rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(29,185,84,0.4)]">
-          <svg viewBox="0 0 24 24" fill="black" className="w-11 h-11">
-            <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.35-1.434-5.305-1.76-8.786-.963-.335.077-.67-.133-.746-.47-.077-.334.132-.67.47-.745 3.808-.87 7.076-.496 9.712 1.115.293.18.386.563.207.856zm1.268-2.834c-.226.367-.714.48-1.08.254-2.686-1.65-6.78-2.13-9.965-1.166-.41.127-.84-.105-.966-.516-.126-.41.106-.84.516-.965 3.65-1.108 8.19-.57 11.24 1.312.368.226.482.714.255 1.08zm.106-2.953C14.73 8.71 8.544 8.5 4.98 9.584c-.496.15-1.01-.132-1.16-.628-.15-.495.13-1.01.627-1.16 4.103-1.245 10.957-1.002 14.88 1.328.448.266.595.845.33 1.293-.264.448-.844.595-1.293.33z" />
-          </svg>
+        <div className="w-full max-w-sm bg-[#18181b] border border-white/10 rounded-3xl p-8 shadow-2xl flex flex-col items-center">
+          <div className="w-16 h-16 mb-5 bg-[#1DB954] rounded-full flex items-center justify-center shadow-[0_0_35px_rgba(29,185,84,0.4)]">
+            <svg viewBox="0 0 24 24" fill="black" className="w-9 h-9">
+              <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.35-1.434-5.305-1.76-8.786-.963-.335.077-.67-.133-.746-.47-.077-.334.132-.67.47-.745 3.808-.87 7.076-.496 9.712 1.115.293.18.386.563.207.856zm1.268-2.834c-.226.367-.714.48-1.08.254-2.686-1.65-6.78-2.13-9.965-1.166-.41.127-.84-.105-.966-.516-.126-.41.106-.84.516-.965 3.65-1.108 8.19-.57 11.24 1.312.368.226.482.714.255 1.08zm.106-2.953C14.73 8.71 8.544 8.5 4.98 9.584c-.496.15-1.01-.132-1.16-.628-.15-.495.13-1.01.627-1.16 4.103-1.245 10.957-1.002 14.88 1.328.448.266.595.845.33 1.293-.264.448-.844.595-1.293.33z" />
+            </svg>
+          </div>
+          <span className="text-[11px] font-bold uppercase tracking-widest text-[#1DB954] mb-1">
+            GeoLab Music Access
+          </span>
+          <h1 className="text-2xl font-extrabold mb-2 text-center tracking-tight">
+            Vantara Music Platform
+          </h1>
+          <p className="text-zinc-400 text-center mb-6 text-xs">
+            Masukkan kode PIN untuk mengakses pemutar musik & playlist <b>GeoLab</b>.
+          </p>
+
+          <form onSubmit={handlePinLogin} className="w-full space-y-4">
+            <div>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={6}
+                autoFocus
+                value={pinInput}
+                onChange={(e) => {
+                  setPinInput(e.target.value);
+                  if (pinError) setPinError("");
+                }}
+                placeholder="• • • •"
+                className="w-full bg-zinc-900 border border-white/15 focus:border-[#1DB954] rounded-2xl py-3.5 px-4 text-center text-2xl font-mono tracking-[0.5em] text-white outline-none transition-all"
+              />
+              {pinError && (
+                <p className="text-red-400 text-xs text-center mt-2 font-medium">{pinError}</p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold py-3.5 rounded-full transition-all duration-200 hover:scale-[1.02] active:scale-95 shadow-lg cursor-pointer"
+            >
+              Masuk dengan PIN
+            </button>
+          </form>
+
+          <div className="mt-6 pt-5 border-t border-white/10 w-full flex flex-col items-center gap-2">
+            {session ? (
+              <button
+                onClick={() => {
+                  localStorage.setItem("vantara_pin_auth", "2016");
+                  localStorage.setItem("vantara_auth_mode", "admin");
+                  setAuthMode("admin");
+                  setPinAuthenticated(true);
+                }}
+                className="text-[11px] text-zinc-400 hover:text-white underline cursor-pointer"
+              >
+                Masuk sebagai Admin Pemilik (Tampilkan Semua Playlist)
+              </button>
+            ) : null}
+            <button
+              onClick={() => signIn("spotify")}
+              className="text-[11px] text-zinc-500 hover:text-[#1DB954] transition-colors cursor-pointer"
+            >
+              ⚙️ Admin: Sinkronkan / Hubungkan Akun Spotify
+            </button>
+          </div>
         </div>
-        <h1 className="text-3xl sm:text-4xl font-extrabold mb-3 text-center tracking-tight">
-          Vantara Music Platform
-        </h1>
-        <p className="text-zinc-400 text-center mb-8 max-w-md text-sm sm:text-base">
-          Putar lagu langsung di browser, kelola playlist, atur antrean musik, dan sinkronkan langsung dengan akun Spotify & layar LCD ESP8266 Anda.
-        </p>
-        <button
-          onClick={() => signIn("spotify")}
-          className="bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold py-3.5 px-9 rounded-full transition-all duration-300 hover:scale-105 active:scale-95 shadow-lg cursor-pointer"
-        >
-          Masuk dengan Spotify
-        </button>
       </div>
     );
   }
@@ -726,15 +859,17 @@ export default function Player() {
           <div className="bg-[#121212] rounded-xl p-4 flex-1 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between mb-3 px-1">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                Playlist Anda ({playlists.length})
+                {authMode === "geolab" ? "Playlist GeoLab" : `Playlist Anda (${playlists.length})`}
               </span>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="text-xs bg-white/10 hover:bg-[#1DB954] hover:text-black text-white font-semibold px-2.5 py-1 rounded-full transition-colors cursor-pointer"
-                title="Buat Playlist Baru"
-              >
-                + Buat
-              </button>
+              {authMode === "admin" && (
+                <button
+                  onClick={() => setShowCreateModal(true)}
+                  className="text-xs bg-white/10 hover:bg-[#1DB954] hover:text-black text-white font-semibold px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+                  title="Buat Playlist Baru"
+                >
+                  + Buat
+                </button>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
@@ -759,11 +894,25 @@ export default function Player() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate text-white">{pl.name}</p>
                     <p className="text-xs text-zinc-500 truncate">
-                      {pl.tracks?.total ?? 0} lagu • {pl.owner?.display_name || "Spotify"}
+                      {pl.tracks?.total ?? 0} lagu • {pl.owner?.display_name || "GeoLab"}
                     </p>
                   </div>
                 </button>
               ))}
+
+              {playlists.length === 0 && authMode === "geolab" && (
+                <div className="p-3 bg-white/[0.03] rounded-xl border border-white/5 text-center space-y-2">
+                  <p className="text-xs text-zinc-400">
+                    Playlist <b>GeoLab</b> belum ditemukan di akun Spotify.
+                  </p>
+                  <button
+                    onClick={handleInitGeoLabPlaylist}
+                    className="w-full bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-bold py-2 px-3 rounded-lg transition-colors cursor-pointer"
+                  >
+                    + Buat Playlist GeoLab
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </aside>
@@ -814,6 +963,10 @@ export default function Player() {
             </div>
 
             <div className="flex items-center gap-2.5">
+              <span className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-full bg-[#1DB954]/15 text-[#1DB954] border border-[#1DB954]/30">
+                {authMode === "geolab" ? "🔒 Mode PIN: GeoLab" : "👑 Mode Admin"}
+              </span>
+
               {/* Web Browser Audio Activator */}
               {webPlayerReady && webPlayerDeviceId && (
                 <button
@@ -837,7 +990,7 @@ export default function Player() {
               )}
 
               <button
-                onClick={() => signOut()}
+                onClick={handleLogout}
                 className="text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-full transition-colors cursor-pointer"
               >
                 Keluar
@@ -853,7 +1006,9 @@ export default function Player() {
                 {/* Quick Playlists Grid */}
                 {playlists.length > 0 && (
                   <section>
-                    <h2 className="text-xl sm:text-2xl font-bold mb-4">Koleksi & Playlist Cepat</h2>
+                    <h2 className="text-xl sm:text-2xl font-bold mb-4">
+                      {authMode === "geolab" ? "Playlist Resmi GeoLab" : "Koleksi & Playlist Cepat"}
+                    </h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {playlists.slice(0, 6).map((pl) => (
                         <div
@@ -981,13 +1136,18 @@ export default function Player() {
 
                   {/* Filter Pills */}
                   <div className="flex items-center gap-2">
-                    {(
-                      [
-                        { id: "all", label: "Semua" },
-                        { id: "tracks", label: "Lagu" },
-                        { id: "albums", label: "Album" },
-                        { id: "playlists", label: "Playlist" },
-                      ] as const
+                    {(authMode === "geolab"
+                      ? ([
+                          { id: "all", label: "Semua" },
+                          { id: "tracks", label: "Lagu" },
+                          { id: "albums", label: "Album" },
+                        ] as const)
+                      : ([
+                          { id: "all", label: "Semua" },
+                          { id: "tracks", label: "Lagu" },
+                          { id: "albums", label: "Album" },
+                          { id: "playlists", label: "Playlist" },
+                        ] as const)
                     ).map((tab) => (
                       <button
                         key={tab.id}
@@ -1083,8 +1243,9 @@ export default function Player() {
                         </section>
                       )}
 
-                    {/* Playlists Results */}
-                    {(searchFilter === "all" || searchFilter === "playlists") &&
+                    {/* Playlists Results (Only in Admin mode) */}
+                    {authMode === "admin" &&
+                      (searchFilter === "all" || searchFilter === "playlists") &&
                       searchResults.playlists.length > 0 && (
                         <section>
                           <h3 className="text-lg font-bold mb-3">Playlist Spotify</h3>
@@ -1761,6 +1922,19 @@ export default function Player() {
                   <span className="text-xs font-bold text-[#1DB954]">+ Tambah</span>
                 </button>
               ))}
+              {playlists.length === 0 && authMode === "geolab" && (
+                <div className="p-4 text-center space-y-3">
+                  <p className="text-xs text-zinc-400">
+                    Playlist <b>GeoLab</b> belum dibuat di akun Spotify Anda.
+                  </p>
+                  <button
+                    onClick={handleInitGeoLabPlaylist}
+                    className="bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-bold px-4 py-2 rounded-full cursor-pointer"
+                  >
+                    + Buat Playlist GeoLab Sekarang
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
