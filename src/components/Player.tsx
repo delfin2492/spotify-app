@@ -87,6 +87,7 @@ export default function Player() {
   // Web Playback SDK State
   const [webPlayerDeviceId, setWebPlayerDeviceId] = useState<string | null>(null);
   const [webPlayerReady, setWebPlayerReady] = useState<boolean>(false);
+  const [embedUrl, setEmbedUrl] = useState<string | null>(null);
   const playerRef = useRef<any>(null);
 
   // Toast Notification
@@ -358,6 +359,18 @@ export default function Player() {
     if (activeTab === "liked") fetchLikedSongs();
   }, [activeTab, pinAuthenticated, session, fetchQueue, fetchLikedSongs]);
 
+  // Helper to convert Spotify URI (spotify:track:xxx) into Embed URL
+  const uriToEmbedUrl = (uri?: string) => {
+    if (!uri) return null;
+    const parts = uri.split(":");
+    if (parts.length >= 3) {
+      const type = parts[1]; // track, playlist, album
+      const id = parts[2];
+      return `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`;
+    }
+    return null;
+  };
+
   // Unified Playback Control Handler
   const handleControl = async (
     action: string,
@@ -371,6 +384,13 @@ export default function Player() {
     }
   ) => {
     try {
+      // Unlock browser audio context for Web Playback SDK if available
+      if (playerRef.current?.activateElement) {
+        try {
+          playerRef.current.activateElement();
+        } catch {}
+      }
+
       // If playing a song/playlist and no active device exists, automatically use browser Web Player if ready
       let targetDeviceId = options?.deviceId;
       if (!targetDeviceId && action === "play" && !data?.device?.id && webPlayerDeviceId) {
@@ -392,25 +412,36 @@ export default function Player() {
       });
 
       if (res.status === 401) {
-        showToast("Sesi/Izin Spotify perlu diperbarui. Silakan Keluar lalu Masuk kembali.", "error");
+        showToast("Sesi/Izin Spotify perlu diperbarui oleh Admin.", "error");
         return;
       }
 
-      if (res.status === 404 && webPlayerDeviceId && !targetDeviceId) {
-        // Retry with webPlayerDeviceId if no active device was found
-        await fetch("/api/spotify/control", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action,
-            value: options?.value,
-            uris: options?.uris,
-            context_uri: options?.context_uri,
-            offset: options?.offset,
-            deviceId: webPlayerDeviceId,
-            uri: options?.uri,
-          }),
-        });
+      if (res.status === 404) {
+        // Fallback: If no active Spotify Connect device is open on HP/PC, open built-in Browser Embed Player!
+        const targetUri =
+          options?.offset?.uri ||
+          options?.uris?.[0] ||
+          options?.context_uri ||
+          data?.trackUri;
+        const fallbackEmbed = uriToEmbedUrl(targetUri);
+        if (fallbackEmbed) {
+          setEmbedUrl(fallbackEmbed);
+          showToast(
+            "Aplikasi Spotify tidak aktif di HP/PC — Memutar langsung lewat Pemutar Web Browser!",
+            "info"
+          );
+          return;
+        }
+        showToast(
+          "Tidak ada perangkat Spotify aktif. Buka aplikasi Spotify di HP/PC atau pilih lagu dari daftar untuk diputar di browser!",
+          "error"
+        );
+        return;
+      }
+
+      // If Spotify Connect succeeded, hide fallback embed
+      if (action === "play" && res.ok) {
+        setEmbedUrl(null);
       }
 
       if (action === "queue") {
@@ -1571,6 +1602,27 @@ export default function Player() {
           </div>
         </main>
       </div>
+
+      {/* Built-in Browser Embed Player (Fallback when no Spotify app is open on HP/PC) */}
+      {embedUrl && (
+        <div className="bg-[#121212] border-t border-white/10 px-4 py-2 flex items-center gap-3 z-30">
+          <iframe
+            src={embedUrl}
+            width="100%"
+            height="80"
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+            loading="lazy"
+            className="rounded-xl border-0 flex-1"
+          />
+          <button
+            onClick={() => setEmbedUrl(null)}
+            className="text-xs text-zinc-400 hover:text-white px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer shrink-0"
+            title="Tutup Pemutar Embed"
+          >
+            ✕ Tutup
+          </button>
+        </div>
+      )}
 
       {/* Persistent Bottom Player Bar */}
       <footer className="h-24 bg-[#09090b] border-t border-white/10 px-4 sm:px-6 flex items-center justify-between gap-4 z-30">
