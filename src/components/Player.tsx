@@ -180,16 +180,52 @@ export default function Player() {
     }
   }, []);
 
-  // Fetch Queue
+  // Fetch Queue (Synchronizes with localStorage so Serverless cold-starts never lose or scramble your queue order)
+  const saveLocalQueue = useCallback((queueList: any[]) => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("vantara_custom_queue", JSON.stringify(queueList));
+      } catch {}
+    }
+  }, []);
+
   const fetchQueue = useCallback(async () => {
     try {
       const res = await fetch("/api/spotify/queue");
       if (res.ok) {
         const json = await res.json();
+        const serverQueue = Array.isArray(json.queue) ? json.queue : [];
+
+        // If serverless container reset its memory (serverQueue empty) but browser has saved queue, restore it to server!
+        if (serverQueue.length === 0 && typeof window !== "undefined") {
+          const savedRaw = localStorage.getItem("vantara_custom_queue");
+          if (savedRaw) {
+            try {
+              const savedQueue = JSON.parse(savedRaw);
+              if (Array.isArray(savedQueue) && savedQueue.length > 0) {
+                const restoreRes = await fetch("/api/spotify/queue", {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "replace", queue: savedQueue }),
+                });
+                if (restoreRes.ok) {
+                  const restoredJson = await restoreRes.json();
+                  setQueueData({
+                    currently_playing: json.currently_playing,
+                    queue: restoredJson.queue || savedQueue,
+                  });
+                  return;
+                }
+              }
+            } catch {}
+          }
+        }
+
         setQueueData(json);
+        saveLocalQueue(serverQueue);
       }
     } catch (e) {}
-  }, []);
+  }, [saveLocalQueue]);
 
   // Fetch Devices
   const fetchDevices = useCallback(async () => {
@@ -471,6 +507,7 @@ export default function Player() {
       offset?: any;
       deviceId?: string;
       uri?: string;
+      queueUris?: string[];
     }
   ) => {
     try {
@@ -487,6 +524,9 @@ export default function Player() {
         targetDeviceId = webPlayerDeviceId;
       }
 
+      const currentQueueUris =
+        options?.queueUris ?? queueData.queue.map((item) => item?.uri).filter(Boolean);
+
       const res = await fetch("/api/spotify/control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -498,6 +538,7 @@ export default function Player() {
           offset: options?.offset,
           deviceId: targetDeviceId,
           uri: options?.uri,
+          queueUris: currentQueueUris,
         }),
       });
 
@@ -568,10 +609,12 @@ export default function Player() {
       });
       if (res.ok) {
         const json = await res.json();
+        const updated = json.queue || queueData.queue;
         setQueueData((prev) => ({
           ...prev,
-          queue: json.queue || prev.queue,
+          queue: updated,
         }));
+        saveLocalQueue(updated);
         showToast(
           position === "top"
             ? "Ditambahkan ke urutan teratas antrean!"
@@ -595,7 +638,9 @@ export default function Player() {
       });
       if (res.ok) {
         const json = await res.json();
-        setQueueData((prev) => ({ ...prev, queue: json.queue || [] }));
+        const updated = json.queue || [];
+        setQueueData((prev) => ({ ...prev, queue: updated }));
+        saveLocalQueue(updated);
         showToast("Lagu dihapus dari antrean", "info");
       }
     } catch {
@@ -612,6 +657,7 @@ export default function Player() {
       });
       if (res.ok) {
         setQueueData((prev) => ({ ...prev, queue: [] }));
+        saveLocalQueue([]);
         showToast("Seluruh antrean berhasil dikosongkan", "info");
       }
     } catch {
@@ -621,6 +667,13 @@ export default function Player() {
 
   const handleMoveInQueue = async (fromIndex: number, toIndex: number) => {
     if (toIndex < 0 || toIndex >= queueData.queue.length) return;
+    // Optimistically update UI & localStorage immediately so it never flickers
+    const optimistic = [...queueData.queue];
+    const [moved] = optimistic.splice(fromIndex, 1);
+    optimistic.splice(toIndex, 0, moved);
+    setQueueData((prev) => ({ ...prev, queue: optimistic }));
+    saveLocalQueue(optimistic);
+
     try {
       const res = await fetch("/api/spotify/queue", {
         method: "PUT",
@@ -629,7 +682,9 @@ export default function Player() {
       });
       if (res.ok) {
         const json = await res.json();
-        setQueueData((prev) => ({ ...prev, queue: json.queue || [] }));
+        const updated = json.queue || optimistic;
+        setQueueData((prev) => ({ ...prev, queue: updated }));
+        saveLocalQueue(updated);
       }
     } catch {
       showToast("Gagal mengubah urutan antrean", "error");
@@ -645,7 +700,9 @@ export default function Player() {
       });
       if (res.ok) {
         const json = await res.json();
-        setQueueData((prev) => ({ ...prev, queue: json.queue || [] }));
+        const updated = json.queue || [];
+        setQueueData((prev) => ({ ...prev, queue: updated }));
+        saveLocalQueue(updated);
         showToast("Lagu duplikat di antrean berhasil dibersihkan!", "success");
       }
     } catch {
@@ -653,19 +710,26 @@ export default function Player() {
     }
   };
 
-  // Play a specific item from inside the Queue (removes that item from Queue and keeps all other queued tracks!)
+  // Play a specific item from inside the Queue (removes that item from Queue and keeps all other queued tracks in exact order!)
   const handlePlayFromQueue = async (index: number) => {
     const target = queueData.queue[index];
     if (!target) return;
-    // Remove only this clicked item from customQueue first
+
+    const remainingQueue = queueData.queue.filter((_, idx) => idx !== index);
+    setQueueData((prev) => ({ ...prev, queue: remainingQueue }));
+    saveLocalQueue(remainingQueue);
+
     await fetch("/api/spotify/queue", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ queueId: target.queueId, index }),
     });
-    await fetchQueue();
-    // Play target song (backend automatically appends remaining customQueue tracks behind it!)
-    handleControl("play", { uris: [target.uri] });
+
+    // Play target song and pass remainingQueue URIs explicitly
+    handleControl("play", {
+      uris: [target.uri],
+      queueUris: remainingQueue.map((item) => item?.uri).filter(Boolean),
+    });
   };
 
   // Play a specific track WITHOUT wiping out the existing queue!
@@ -1644,10 +1708,24 @@ export default function Player() {
                       </button>
                     )}
                     <button
-                      onClick={fetchQueue}
+                      onClick={async () => {
+                        const res = await fetch("/api/spotify/queue", {
+                          method: "PUT",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ action: "sync-from-spotify" }),
+                        });
+                        if (res.ok) {
+                          const json = await res.json();
+                          const updated = json.queue || [];
+                          setQueueData((prev) => ({ ...prev, queue: updated }));
+                          saveLocalQueue(updated);
+                          showToast("Antrean disinkronkan dari aplikasi Spotify", "info");
+                        }
+                      }}
                       className="text-xs bg-white/10 hover:bg-white/15 px-3.5 py-2 rounded-full font-semibold cursor-pointer"
+                      title="Impor antrean aktif dari aplikasi Spotify"
                     >
-                      ↻ Segarkan
+                      ⬇ Impor dari Spotify
                     </button>
                   </div>
                 </div>

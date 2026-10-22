@@ -42,3 +42,4 @@ next-env.d.ts
 
 certificates
 .spotify-token
+.vantara-queue.json

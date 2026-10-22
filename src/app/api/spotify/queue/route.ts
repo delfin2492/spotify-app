@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { getValidAccessToken } from '@/lib/auth';
-import { tokenCache, QueuedTrackItem } from '@/lib/spotify-cache';
+import {
+  QueuedTrackItem,
+  loadPersistedQueue,
+  savePersistedQueue,
+} from '@/lib/spotify-cache';
 
 function normalizeTrackToQueueItem(track: any): QueuedTrackItem | null {
   if (!track || !track.uri) return null;
@@ -48,6 +52,9 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const persisted = loadPersistedQueue();
+  let customQueue = persisted.queue;
+
   try {
     const res = await fetch('https://api.spotify.com/v1/me/player/queue', {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -55,38 +62,29 @@ export async function GET() {
     });
 
     let currentlyPlaying: any = null;
-    let spotifyQueue: any[] = [];
 
     if (res.ok) {
       const data = await res.json();
       currentlyPlaying = data.currently_playing || null;
-      spotifyQueue = data.queue || [];
-    }
-
-    // Seed customQueue from Spotify's queue on first load if not yet initialized
-    if (!tokenCache.customQueueInitialized && spotifyQueue.length > 0) {
-      tokenCache.customQueue = spotifyQueue
-        .map((t: any) => normalizeTrackToQueueItem(t))
-        .filter((t): t is QueuedTrackItem => t !== null);
-      tokenCache.customQueueInitialized = true;
     }
 
     // If the currently playing song matches the first item in customQueue (e.g. Spotify naturally advanced to the next song), pop it automatically
     if (
       currentlyPlaying?.uri &&
-      tokenCache.customQueue.length > 0 &&
-      tokenCache.customQueue[0].uri === currentlyPlaying.uri
+      customQueue.length > 0 &&
+      customQueue[0].uri === currentlyPlaying.uri
     ) {
-      tokenCache.customQueue.shift();
+      customQueue = customQueue.slice(1);
+      savePersistedQueue(customQueue, true);
     }
 
     return NextResponse.json({
       currently_playing: currentlyPlaying,
-      queue: tokenCache.customQueue,
+      queue: customQueue,
     });
   } catch (error) {
     return NextResponse.json(
-      { currently_playing: null, queue: tokenCache.customQueue || [] },
+      { currently_playing: null, queue: customQueue || [] },
       { status: 200 }
     );
   }
@@ -106,7 +104,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { track, uri, position = 'bottom' } = body;
 
-    tokenCache.customQueueInitialized = true;
+    const { queue } = loadPersistedQueue();
+    const updatedQueue = [...queue];
 
     let item: QueuedTrackItem | null = null;
     if (track && track.uri) {
@@ -120,15 +119,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (position === 'top' || position === 'next') {
-      tokenCache.customQueue.unshift(item);
+      updatedQueue.unshift(item);
     } else {
-      tokenCache.customQueue.push(item);
+      updatedQueue.push(item);
     }
+
+    savePersistedQueue(updatedQueue, true);
 
     return NextResponse.json({
       success: true,
       item,
-      queue: tokenCache.customQueue,
+      queue: updatedQueue,
     });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to add to queue' }, { status: 500 });
@@ -154,25 +155,26 @@ export async function PUT(req: NextRequest) {
     const body = await req.json();
     const { action, fromIndex, toIndex, queue } = body;
 
-    tokenCache.customQueueInitialized = true;
+    const persisted = loadPersistedQueue();
+    let updatedQueue = [...persisted.queue];
 
     if (action === 'move' && typeof fromIndex === 'number' && typeof toIndex === 'number') {
       if (
         fromIndex >= 0 &&
-        fromIndex < tokenCache.customQueue.length &&
+        fromIndex < updatedQueue.length &&
         toIndex >= 0 &&
-        toIndex < tokenCache.customQueue.length
+        toIndex < updatedQueue.length
       ) {
-        const [moved] = tokenCache.customQueue.splice(fromIndex, 1);
-        tokenCache.customQueue.splice(toIndex, 0, moved);
+        const [moved] = updatedQueue.splice(fromIndex, 1);
+        updatedQueue.splice(toIndex, 0, moved);
       }
     } else if (action === 'replace' && Array.isArray(queue)) {
-      tokenCache.customQueue = queue
+      updatedQueue = queue
         .map((t: any) => normalizeTrackToQueueItem(t))
-        .filter((t): t is QueuedTrackItem => t !== null);
+        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
     } else if (action === 'deduplicate') {
       const seen = new Set<string>();
-      tokenCache.customQueue = tokenCache.customQueue.filter((item) => {
+      updatedQueue = updatedQueue.filter((item) => {
         if (seen.has(item.uri)) return false;
         seen.add(item.uri);
         return true;
@@ -184,15 +186,17 @@ export async function PUT(req: NextRequest) {
       });
       if (res.ok) {
         const data = await res.json();
-        tokenCache.customQueue = (data.queue || [])
+        updatedQueue = (data.queue || [])
           .map((t: any) => normalizeTrackToQueueItem(t))
           .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
       }
     }
 
+    savePersistedQueue(updatedQueue, true);
+
     return NextResponse.json({
       success: true,
-      queue: tokenCache.customQueue,
+      queue: updatedQueue,
     });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to update queue' }, { status: 500 });
@@ -208,19 +212,22 @@ export async function DELETE(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const { queueId, index, clearAll } = body;
 
-    tokenCache.customQueueInitialized = true;
+    const persisted = loadPersistedQueue();
+    let updatedQueue = [...persisted.queue];
 
     if (clearAll) {
-      tokenCache.customQueue = [];
+      updatedQueue = [];
     } else if (queueId) {
-      tokenCache.customQueue = tokenCache.customQueue.filter((it) => it.queueId !== queueId);
-    } else if (typeof index === 'number' && index >= 0 && index < tokenCache.customQueue.length) {
-      tokenCache.customQueue.splice(index, 1);
+      updatedQueue = updatedQueue.filter((it) => it.queueId !== queueId);
+    } else if (typeof index === 'number' && index >= 0 && index < updatedQueue.length) {
+      updatedQueue.splice(index, 1);
     }
+
+    savePersistedQueue(updatedQueue, true);
 
     return NextResponse.json({
       success: true,
-      queue: tokenCache.customQueue,
+      queue: updatedQueue,
     });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to delete from queue' }, { status: 500 });

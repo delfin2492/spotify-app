@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getValidAccessToken } from '@/lib/auth';
-import { tokenCache } from '@/lib/spotify-cache';
+import { loadPersistedQueue, savePersistedQueue } from '@/lib/spotify-cache';
 
 async function getFallbackDeviceId(accessToken: string): Promise<string | null> {
   try {
@@ -41,6 +41,11 @@ export async function POST(req: Request) {
   const body = await req.json();
   const { action, value, uris, context_uri, offset, deviceId, uri } = body;
 
+  const { queue: activeCustomQueue } = loadPersistedQueue();
+  const clientQueueUris: string[] = Array.isArray(body.queueUris)
+    ? body.queueUris
+    : activeCustomQueue.map((item) => item.uri).filter(Boolean);
+
   const buildRequest = (targetDeviceId?: string | null) => {
     const deviceQuery = targetDeviceId ? `device_id=${encodeURIComponent(targetDeviceId)}` : '';
     const appendQuery = (base: string, param: string) =>
@@ -60,9 +65,8 @@ export async function POST(req: Request) {
           if (uris) {
             // If playing a single track (or custom list) while customQueue has songs,
             // append customQueue URIs after the requested URIs so Spotify's playback queue is NOT wiped out!
-            if (!body.ignoreCustomQueue && tokenCache.customQueue.length > 0) {
-              const queueUris = tokenCache.customQueue.map((item) => item.uri).filter(Boolean);
-              const combined = [...uris, ...queueUris].slice(0, 100);
+            if (!body.ignoreCustomQueue && clientQueueUris.length > 0) {
+              const combined = [...uris, ...clientQueueUris].slice(0, 100);
               payload.uris = combined;
             } else {
               payload.uris = uris;
@@ -80,14 +84,14 @@ export async function POST(req: Request) {
       case 'next':
         // If our managed customQueue has tracks, play the top track from customQueue,
         // while keeping the remaining customQueue tracks behind it!
-        if (tokenCache.customQueue.length > 0) {
-          const nextItem = tokenCache.customQueue[0];
-          const remainingUris = tokenCache.customQueue.slice(1).map((item) => item.uri).filter(Boolean);
+        if (clientQueueUris.length > 0) {
+          const nextUri = clientQueueUris[0];
+          const remainingUris = clientQueueUris.slice(1);
           url += 'play';
           if (deviceQuery) url = appendQuery(url, deviceQuery);
           method = 'PUT';
           payload = {
-            uris: [nextItem.uri, ...remainingUris].slice(0, 100),
+            uris: [nextUri, ...remainingUris].slice(0, 100),
           };
         } else {
           url += 'next';
@@ -198,8 +202,16 @@ export async function POST(req: Request) {
     }
 
     if (response.status === 204 || response.status === 200) {
-      if (action === 'next' && tokenCache.customQueue.length > 0) {
-        tokenCache.customQueue.shift();
+      if (action === 'next' && activeCustomQueue.length > 0) {
+        savePersistedQueue(activeCustomQueue.slice(1), true);
+      }
+      // Whenever the user plays a song or reorders, ensure Shuffle is OFF if we are following customQueue order
+      if ((action === 'play' || action === 'next') && clientQueueUris.length > 0) {
+        const devParam = deviceId ? `&device_id=${encodeURIComponent(deviceId)}` : '';
+        fetch(`https://api.spotify.com/v1/me/player/shuffle?state=false${devParam}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }).catch(() => {});
       }
       return NextResponse.json({ success: true });
     }
