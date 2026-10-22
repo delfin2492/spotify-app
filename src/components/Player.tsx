@@ -324,10 +324,11 @@ export default function Player() {
     fetchPlaylists();
     fetchHomeAndInitSdk();
     fetchDevices();
+    fetchQueue();
 
     const interval = setInterval(fetchNowPlaying, 3000);
     return () => clearInterval(interval);
-  }, [pinAuthenticated, session, fetchNowPlaying, fetchPlaylists, fetchHomeAndInitSdk, fetchDevices]);
+  }, [pinAuthenticated, session, fetchNowPlaying, fetchPlaylists, fetchHomeAndInitSdk, fetchDevices, fetchQueue]);
 
   // Smooth 250ms local progress bar timer when playing (for responsive synced lyrics & seek bar)
   useEffect(() => {
@@ -381,7 +382,8 @@ export default function Player() {
     if (lastFetchedTrackKeyRef.current === trackKey) return;
     lastFetchedTrackKeyRef.current = trackKey;
     fetchLyricsForTrack(data.title, data.artist, data.album, data.durationMs);
-  }, [data?.trackId, data?.title, data?.artist, data?.album, data?.durationMs, fetchLyricsForTrack]);
+    fetchQueue();
+  }, [data?.trackId, data?.title, data?.artist, data?.album, data?.durationMs, fetchLyricsForTrack, fetchQueue]);
 
   // Calculate active synced lyric line index based on localProgress
   const activeLyricIndex = (() => {
@@ -534,7 +536,9 @@ export default function Player() {
 
       if (action === "queue") {
         showToast("Lagu ditambahkan ke antrean!", "success");
-        if (activeTab === "queue") fetchQueue();
+        fetchQueue();
+      } else if (action === "next") {
+        fetchQueue();
       } else if (action === "transfer") {
         showToast("Pemutaran dipindahkan ke perangkat terpilih", "info");
         fetchDevices();
@@ -549,20 +553,140 @@ export default function Player() {
     }
   };
 
-  // Play a specific track or context
-  const playTrack = (trackUri: string, contextUri?: string) => {
-    if (contextUri) {
-      handleControl("play", {
-        context_uri: contextUri,
-        offset: { uri: trackUri },
+  // CRUD Antrean (Managed Queue)
+  const handleAddToQueue = async (trackOrUri: any, position: "bottom" | "top" = "bottom") => {
+    try {
+      const payload =
+        typeof trackOrUri === "string"
+          ? { uri: trackOrUri, position }
+          : { track: trackOrUri, uri: trackOrUri?.uri, position };
+
+      const res = await fetch("/api/spotify/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
-    } else {
-      handleControl("play", { uris: [trackUri] });
+      if (res.ok) {
+        const json = await res.json();
+        setQueueData((prev) => ({
+          ...prev,
+          queue: json.queue || prev.queue,
+        }));
+        showToast(
+          position === "top"
+            ? "Ditambahkan ke urutan teratas antrean!"
+            : "Lagu ditambahkan ke antrean!",
+          "success"
+        );
+      } else {
+        showToast("Gagal menambahkan lagu ke antrean", "error");
+      }
+    } catch {
+      showToast("Gagal menambahkan ke antrean", "error");
     }
   };
 
-  // Play an entire playlist or album
-  const playContext = (contextUri: string) => {
+  const handleRemoveFromQueue = async (queueId?: string, index?: number) => {
+    try {
+      const res = await fetch("/api/spotify/queue", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ queueId, index }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setQueueData((prev) => ({ ...prev, queue: json.queue || [] }));
+        showToast("Lagu dihapus dari antrean", "info");
+      }
+    } catch {
+      showToast("Gagal menghapus lagu dari antrean", "error");
+    }
+  };
+
+  const handleClearQueue = async () => {
+    try {
+      const res = await fetch("/api/spotify/queue", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clearAll: true }),
+      });
+      if (res.ok) {
+        setQueueData((prev) => ({ ...prev, queue: [] }));
+        showToast("Seluruh antrean berhasil dikosongkan", "info");
+      }
+    } catch {
+      showToast("Gagal mengosongkan antrean", "error");
+    }
+  };
+
+  const handleMoveInQueue = async (fromIndex: number, toIndex: number) => {
+    if (toIndex < 0 || toIndex >= queueData.queue.length) return;
+    try {
+      const res = await fetch("/api/spotify/queue", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "move", fromIndex, toIndex }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setQueueData((prev) => ({ ...prev, queue: json.queue || [] }));
+      }
+    } catch {
+      showToast("Gagal mengubah urutan antrean", "error");
+    }
+  };
+
+  const handleDeduplicateQueue = async () => {
+    try {
+      const res = await fetch("/api/spotify/queue", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "deduplicate" }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setQueueData((prev) => ({ ...prev, queue: json.queue || [] }));
+        showToast("Lagu duplikat di antrean berhasil dibersihkan!", "success");
+      }
+    } catch {
+      showToast("Gagal membersihkan duplikat", "error");
+    }
+  };
+
+  // Play a specific item from inside the Queue (removes that item from Queue and keeps all other queued tracks!)
+  const handlePlayFromQueue = async (index: number) => {
+    const target = queueData.queue[index];
+    if (!target) return;
+    // Remove only this clicked item from customQueue first
+    await fetch("/api/spotify/queue", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queueId: target.queueId, index }),
+    });
+    await fetchQueue();
+    // Play target song (backend automatically appends remaining customQueue tracks behind it!)
+    handleControl("play", { uris: [target.uri] });
+  };
+
+  // Play a specific track WITHOUT wiping out the existing queue!
+  // Even when clicking a song inside a Playlist or Album, we play its URI (backed by our customQueue)
+  // so that the user's queue is preserved and never replaced by the whole playlist/album unless "Putar Playlist" is clicked.
+  const playTrack = (trackUri: string, _contextUri?: string) => {
+    handleControl("play", { uris: [trackUri] });
+  };
+
+  // Play an entire playlist or album (and populate customQueue with its tracks)
+  const playContext = (contextUri: string, tracksList?: any[]) => {
+    if (Array.isArray(tracksList) && tracksList.length > 0) {
+      fetch("/api/spotify/queue", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "replace",
+          queue: tracksList.slice(1),
+        }),
+      }).then(() => fetchQueue());
+    }
     handleControl("play", { context_uri: contextUri });
   };
 
@@ -1224,7 +1348,7 @@ export default function Player() {
 
                         <div className="flex items-center justify-between gap-1 mt-3 pt-2 border-t border-white/5">
                           <button
-                            onClick={() => handleControl("queue", { uri: track.uri })}
+                            onClick={() => handleAddToQueue(track)}
                             className="text-[11px] text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 px-2 py-1 rounded transition-colors cursor-pointer"
                             title="Tambah ke Antrean"
                           >
@@ -1255,7 +1379,7 @@ export default function Player() {
                           track={track}
                           isCurrent={data?.trackId === track.id}
                           onPlay={() => playTrack(track.uri)}
-                          onQueue={() => handleControl("queue", { uri: track.uri })}
+                          onQueue={() => handleAddToQueue(track)}
                           onAddToPlaylist={() => setTrackToAdd(track)}
                           onLike={() => handleToggleLike(track.id, "save")}
                         />
@@ -1337,7 +1461,7 @@ export default function Player() {
                                 track={track}
                                 isCurrent={data?.trackId === track.id}
                                 onPlay={() => playTrack(track.uri)}
-                                onQueue={() => handleControl("queue", { uri: track.uri })}
+                                onQueue={() => handleAddToQueue(track)}
                                 onAddToPlaylist={() => setTrackToAdd(track)}
                                 onLike={() => handleToggleLike(track.id, "save")}
                               />
@@ -1467,15 +1591,8 @@ export default function Player() {
                         index={idx + 1}
                         track={item.track}
                         isCurrent={data?.trackId === item.track.id}
-                        onPlay={() =>
-                          handleControl("play", {
-                            uris: likedTracks
-                              .slice(idx, idx + 40)
-                              .map((i) => i.track?.uri)
-                              .filter(Boolean),
-                          })
-                        }
-                        onQueue={() => handleControl("queue", { uri: item.track.uri })}
+                        onPlay={() => playTrack(item.track.uri)}
+                        onQueue={() => handleAddToQueue(item.track)}
                         onAddToPlaylist={() => setTrackToAdd(item.track)}
                         onRemove={() => handleToggleLike(item.track.id, "remove")}
                         removeLabel="Hapus Like"
@@ -1494,56 +1611,128 @@ export default function Player() {
             {/* TAB: QUEUE */}
             {activeTab === "queue" && (
               <div className="space-y-6">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-2xl font-bold">Antrean Pemutaran (Queue)</h2>
-                    <p className="text-xs text-zinc-400">Daftar lagu yang sedang dan akan diputar di Spotify Anda</p>
+                    <p className="text-xs text-zinc-400">
+                      Kelola antrean lagu Anda (Tambah, Urutkan Naik/Turun, Hapus). Memutar lagu lain tidak akan menghapus antrean ini.
+                    </p>
                   </div>
-                  <button
-                    onClick={fetchQueue}
-                    className="text-xs bg-white/10 hover:bg-white/15 px-3.5 py-2 rounded-full font-semibold cursor-pointer"
-                  >
-                    ↻ Segarkan
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => setActiveTab("search")}
+                      className="text-xs bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold px-3.5 py-2 rounded-full transition-colors cursor-pointer"
+                    >
+                      + Tambah Lagu ke Antrean
+                    </button>
+                    {queueData.queue.length > 1 && (
+                      <button
+                        onClick={handleDeduplicateQueue}
+                        className="text-xs bg-white/10 hover:bg-white/15 text-zinc-200 px-3.5 py-2 rounded-full font-semibold cursor-pointer"
+                        title="Hapus lagu yang kembar / duplikat di dalam antrean"
+                      >
+                        ✨ Bersihkan Duplikat
+                      </button>
+                    )}
+                    {queueData.queue.length > 0 && (
+                      <button
+                        onClick={handleClearQueue}
+                        className="text-xs bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/20 px-3.5 py-2 rounded-full font-semibold cursor-pointer"
+                        title="Kosongkan seluruh daftar antrean"
+                      >
+                        🗑 Kosongkan Antrean
+                      </button>
+                    )}
+                    <button
+                      onClick={fetchQueue}
+                      className="text-xs bg-white/10 hover:bg-white/15 px-3.5 py-2 rounded-full font-semibold cursor-pointer"
+                    >
+                      ↻ Segarkan
+                    </button>
+                  </div>
                 </div>
 
-                {queueData.currently_playing && (
+                {(queueData.currently_playing || data?.title) && (
                   <section>
                     <h3 className="text-xs font-bold uppercase tracking-wider text-[#1DB954] mb-2">
                       Sedang Diputar Sekarang
                     </h3>
                     <div className="bg-[#1DB954]/10 border border-[#1DB954]/30 rounded-xl">
-                      <TrackRow
-                        index={1}
-                        track={queueData.currently_playing}
-                        isCurrent={true}
-                        onPlay={() => playTrack(queueData.currently_playing.uri)}
-                        onQueue={() => handleControl("queue", { uri: queueData.currently_playing.uri })}
-                        onAddToPlaylist={() => setTrackToAdd(queueData.currently_playing)}
-                      />
+                      {queueData.currently_playing ? (
+                        <TrackRow
+                          index={1}
+                          track={queueData.currently_playing}
+                          isCurrent={true}
+                          onPlay={() => playTrack(queueData.currently_playing.uri)}
+                          onQueue={() => handleAddToQueue(queueData.currently_playing)}
+                          onAddToPlaylist={() => setTrackToAdd(queueData.currently_playing)}
+                        />
+                      ) : (
+                        <div className="flex items-center justify-between gap-3 px-4 py-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {data?.albumImageUrl && (
+                              <img
+                                src={data.albumImageUrl}
+                                alt={data.title}
+                                className="w-10 h-10 rounded object-cover"
+                              />
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold text-[#1DB954] truncate">{data?.title}</p>
+                              <p className="text-xs text-zinc-400 truncate">
+                                {data?.artist} {data?.album ? `• ${data.album}` : ""}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-xs text-zinc-400 font-mono">
+                            {formatTime(data?.durationMs || 0)}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </section>
                 )}
 
                 <section>
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-2">
-                    Lagu Berikutnya di Antrean ({queueData.queue.length})
-                  </h3>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                      Lagu Berikutnya di Antrean ({queueData.queue.length})
+                    </h3>
+                    {queueData.queue.length > 0 && (
+                      <span className="text-[11px] text-zinc-500">
+                        Klik ▶ untuk langsung memutar • Gunakan ↑ ↓ untuk mengubah urutan • Klik Hapus untuk mengeluarkan
+                      </span>
+                    )}
+                  </div>
                   <div className="bg-white/[0.03] rounded-xl border border-white/5 divide-y divide-white/5">
                     {queueData.queue.map((track, idx) => (
                       <TrackRow
-                        key={`${track.id}-${idx}`}
+                        key={track.queueId || `${track.id}-${idx}`}
                         index={idx + 1}
                         track={track}
                         isCurrent={false}
-                        onPlay={() => playTrack(track.uri)}
-                        onQueue={() => handleControl("queue", { uri: track.uri })}
+                        onPlay={() => handlePlayFromQueue(idx)}
+                        onQueue={() => handleAddToQueue(track)}
                         onAddToPlaylist={() => setTrackToAdd(track)}
+                        onMoveUp={idx > 0 ? () => handleMoveInQueue(idx, idx - 1) : undefined}
+                        onMoveDown={
+                          idx < queueData.queue.length - 1
+                            ? () => handleMoveInQueue(idx, idx + 1)
+                            : undefined
+                        }
+                        onRemove={() => handleRemoveFromQueue(track.queueId, idx)}
+                        removeLabel="Hapus"
                       />
                     ))}
                     {queueData.queue.length === 0 && (
-                      <div className="p-8 text-center text-zinc-500 text-sm">
-                        Antrean kosong. Tambahkan lagu dari menu Cari atau Beranda!
+                      <div className="p-10 text-center text-zinc-400 space-y-3">
+                        <p className="text-sm">Antrean pemutaran saat ini kosong.</p>
+                        <button
+                          onClick={() => setActiveTab("search")}
+                          className="bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-bold px-4 py-2 rounded-full cursor-pointer"
+                        >
+                          + Cari & Tambah Lagu ke Antrean
+                        </button>
                       </div>
                     )}
                   </div>
@@ -1585,7 +1774,12 @@ export default function Player() {
                       </div>
                       <div className="flex items-center gap-2.5">
                         <button
-                          onClick={() => playContext(selectedPlaylist.uri)}
+                          onClick={() =>
+                            playContext(
+                              selectedPlaylist.uri,
+                              (selectedPlaylist.tracks?.items || []).map((i: any) => i.track).filter(Boolean)
+                            )
+                          }
                           className="bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold px-6 py-3 rounded-full shadow-lg transition-transform hover:scale-105 cursor-pointer"
                         >
                           ▶ Putar Playlist
@@ -1607,8 +1801,8 @@ export default function Player() {
                             index={idx + 1}
                             track={item.track}
                             isCurrent={data?.trackId === item.track.id}
-                            onPlay={() => playTrack(item.track.uri, selectedPlaylist.uri)}
-                            onQueue={() => handleControl("queue", { uri: item.track.uri })}
+                            onPlay={() => playTrack(item.track.uri)}
+                            onQueue={() => handleAddToQueue(item.track)}
                             onAddToPlaylist={() => setTrackToAdd(item.track)}
                             onRemove={() =>
                               handleRemoveTrackFromPlaylist(selectedPlaylist.id, item.track.uri)
@@ -1648,7 +1842,15 @@ export default function Player() {
                     </p>
                   </div>
                   <button
-                    onClick={() => playContext(selectedAlbum.uri)}
+                    onClick={() =>
+                      playContext(
+                        selectedAlbum.uri,
+                        (selectedAlbum.tracks?.items || []).map((t: any) => ({
+                          ...t,
+                          album: { name: selectedAlbum.name, images: selectedAlbum.images },
+                        }))
+                      )
+                    }
                     className="bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold px-6 py-3 rounded-full shadow-lg transition-transform hover:scale-105 cursor-pointer"
                   >
                     ▶ Putar Album
@@ -1656,25 +1858,23 @@ export default function Player() {
                 </div>
 
                 <div className="bg-white/[0.03] rounded-xl border border-white/5 divide-y divide-white/5">
-                  {(selectedAlbum.tracks?.items || []).map((track: any, idx: number) => (
-                    <TrackRow
-                      key={track.id}
-                      index={idx + 1}
-                      track={{
-                        ...track,
-                        album: { name: selectedAlbum.name, images: selectedAlbum.images },
-                      }}
-                      isCurrent={data?.trackId === track.id}
-                      onPlay={() => playTrack(track.uri, selectedAlbum.uri)}
-                      onQueue={() => handleControl("queue", { uri: track.uri })}
-                      onAddToPlaylist={() =>
-                        setTrackToAdd({
-                          ...track,
-                          album: { name: selectedAlbum.name, images: selectedAlbum.images },
-                        })
-                      }
-                    />
-                  ))}
+                  {(selectedAlbum.tracks?.items || []).map((track: any, idx: number) => {
+                    const enrichedTrack = {
+                      ...track,
+                      album: { name: selectedAlbum.name, images: selectedAlbum.images },
+                    };
+                    return (
+                      <TrackRow
+                        key={track.id}
+                        index={idx + 1}
+                        track={enrichedTrack}
+                        isCurrent={data?.trackId === track.id}
+                        onPlay={() => playTrack(track.uri)}
+                        onQueue={() => handleAddToQueue(enrichedTrack)}
+                        onAddToPlaylist={() => setTrackToAdd(enrichedTrack)}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -2394,6 +2594,8 @@ function TrackRow({
   onQueue,
   onAddToPlaylist,
   onLike,
+  onMoveUp,
+  onMoveDown,
   onRemove,
   removeLabel,
 }: {
@@ -2404,6 +2606,8 @@ function TrackRow({
   onQueue: () => void;
   onAddToPlaylist: () => void;
   onLike?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
   onRemove?: () => void;
   removeLabel?: string;
 }) {
@@ -2444,6 +2648,34 @@ function TrackRow({
       </div>
 
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {(onMoveUp || onMoveDown) && (
+          <div className="flex items-center gap-1 mr-1">
+            <button
+              onClick={onMoveUp}
+              disabled={!onMoveUp}
+              className={`w-6 h-6 rounded flex items-center justify-center text-xs transition-colors ${
+                onMoveUp
+                  ? "text-zinc-300 hover:text-white bg-white/5 hover:bg-white/15 cursor-pointer"
+                  : "text-zinc-700 bg-white/[0.02] cursor-not-allowed"
+              }`}
+              title="Geser Naik di Antrean"
+            >
+              ↑
+            </button>
+            <button
+              onClick={onMoveDown}
+              disabled={!onMoveDown}
+              className={`w-6 h-6 rounded flex items-center justify-center text-xs transition-colors ${
+                onMoveDown
+                  ? "text-zinc-300 hover:text-white bg-white/5 hover:bg-white/15 cursor-pointer"
+                  : "text-zinc-700 bg-white/[0.02] cursor-not-allowed"
+              }`}
+              title="Geser Turun di Antrean"
+            >
+              ↓
+            </button>
+          </div>
+        )}
         {onLike && (
           <button
             onClick={onLike}
@@ -2470,7 +2702,8 @@ function TrackRow({
         {onRemove && (
           <button
             onClick={onRemove}
-            className="text-[11px] font-medium text-red-400 hover:bg-red-500/10 px-2 py-1 rounded-full transition-colors cursor-pointer"
+            className="text-[11px] font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+            title="Hapus lagu ini"
           >
             {removeLabel || "Hapus"}
           </button>

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getValidAccessToken } from '@/lib/auth';
+import { tokenCache } from '@/lib/spotify-cache';
 
 async function getFallbackDeviceId(accessToken: string): Promise<string | null> {
   try {
@@ -56,7 +57,17 @@ export async function POST(req: Request) {
         method = 'PUT';
         if (uris || context_uri || offset) {
           payload = {};
-          if (uris) payload.uris = uris;
+          if (uris) {
+            // If playing a single track (or custom list) while customQueue has songs,
+            // append customQueue URIs after the requested URIs so Spotify's playback queue is NOT wiped out!
+            if (!body.ignoreCustomQueue && tokenCache.customQueue.length > 0) {
+              const queueUris = tokenCache.customQueue.map((item) => item.uri).filter(Boolean);
+              const combined = [...uris, ...queueUris].slice(0, 100);
+              payload.uris = combined;
+            } else {
+              payload.uris = uris;
+            }
+          }
           if (context_uri) payload.context_uri = context_uri;
           if (offset) payload.offset = offset;
         }
@@ -67,9 +78,22 @@ export async function POST(req: Request) {
         method = 'PUT';
         break;
       case 'next':
-        url += 'next';
-        if (deviceQuery) url = appendQuery(url, deviceQuery);
-        method = 'POST';
+        // If our managed customQueue has tracks, play the top track from customQueue,
+        // while keeping the remaining customQueue tracks behind it!
+        if (tokenCache.customQueue.length > 0) {
+          const nextItem = tokenCache.customQueue[0];
+          const remainingUris = tokenCache.customQueue.slice(1).map((item) => item.uri).filter(Boolean);
+          url += 'play';
+          if (deviceQuery) url = appendQuery(url, deviceQuery);
+          method = 'PUT';
+          payload = {
+            uris: [nextItem.uri, ...remainingUris].slice(0, 100),
+          };
+        } else {
+          url += 'next';
+          if (deviceQuery) url = appendQuery(url, deviceQuery);
+          method = 'POST';
+        }
         break;
       case 'previous':
         url += 'previous';
@@ -174,6 +198,9 @@ export async function POST(req: Request) {
     }
 
     if (response.status === 204 || response.status === 200) {
+      if (action === 'next' && tokenCache.customQueue.length > 0) {
+        tokenCache.customQueue.shift();
+      }
       return NextResponse.json({ success: true });
     }
 
