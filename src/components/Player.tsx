@@ -28,7 +28,20 @@ interface NowPlaying {
   device?: SpotifyDevice | null;
 }
 
-type ActiveTab = "home" | "search" | "liked" | "queue" | "playlist" | "album" | "focus";
+interface SyncedLyricLine {
+  timeMs: number;
+  text: string;
+}
+
+interface LyricsData {
+  found: boolean;
+  instrumental: boolean;
+  syncedLyrics: SyncedLyricLine[];
+  plainLyrics: string;
+  source?: string;
+}
+
+type ActiveTab = "home" | "search" | "liked" | "queue" | "playlist" | "album" | "focus" | "lyrics";
 
 export default function Player() {
   const { data: session, status } = useSession();
@@ -89,6 +102,15 @@ export default function Player() {
   const [webPlayerReady, setWebPlayerReady] = useState<boolean>(false);
   const [embedUrl, setEmbedUrl] = useState<string | null>(null);
   const playerRef = useRef<any>(null);
+
+  // Lyrics State
+  const [lyrics, setLyrics] = useState<LyricsData | null>(null);
+  const [loadingLyrics, setLoadingLyrics] = useState<boolean>(false);
+  const [autoScrollLyrics, setAutoScrollLyrics] = useState<boolean>(true);
+  const [focusShowLyrics, setFocusShowLyrics] = useState<boolean>(true);
+  const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
+  const activeLyricRef = useRef<HTMLDivElement | null>(null);
+  const lastFetchedTrackKeyRef = useRef<string>("");
 
   // Toast Notification
   const [toast, setToast] = useState<{ message: string; type?: "success" | "error" | "info" } | null>(null);
@@ -307,19 +329,85 @@ export default function Player() {
     return () => clearInterval(interval);
   }, [pinAuthenticated, session, fetchNowPlaying, fetchPlaylists, fetchHomeAndInitSdk, fetchDevices]);
 
-  // Smooth 1-second local progress bar timer when playing
+  // Smooth 250ms local progress bar timer when playing (for responsive synced lyrics & seek bar)
   useEffect(() => {
     if (!data?.isPlaying || isSeeking) return;
     const timer = setInterval(() => {
       setLocalProgress((prev) => {
-        if (prev + 1000 <= (data.durationMs || 0)) {
-          return prev + 1000;
+        if (prev + 250 <= (data.durationMs || 0)) {
+          return prev + 250;
         }
         return prev;
       });
-    }, 1000);
+    }, 250);
     return () => clearInterval(timer);
   }, [data?.isPlaying, data?.durationMs, isSeeking]);
+
+  // Fetch Lyrics automatically whenever the current song changes
+  const fetchLyricsForTrack = useCallback(
+    async (title?: string, artist?: string, album?: string, durationMs?: number) => {
+      if (!title) {
+        setLyrics(null);
+        return;
+      }
+      setLoadingLyrics(true);
+      try {
+        const params = new URLSearchParams({
+          title,
+          artist: artist || "",
+          album: album || "",
+          durationMs: String(durationMs || 0),
+        });
+        const res = await fetch(`/api/spotify/lyrics?${params.toString()}`);
+        if (res.ok) {
+          const json: LyricsData = await res.json();
+          setLyrics(json);
+        } else {
+          setLyrics({ found: false, instrumental: false, syncedLyrics: [], plainLyrics: "" });
+        }
+      } catch (e) {
+        console.error("Failed to fetch lyrics", e);
+        setLyrics({ found: false, instrumental: false, syncedLyrics: [], plainLyrics: "" });
+      } finally {
+        setLoadingLyrics(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!data?.title) return;
+    const trackKey = `${data.trackId || ""}|${data.title}|${data.artist || ""}`;
+    if (lastFetchedTrackKeyRef.current === trackKey) return;
+    lastFetchedTrackKeyRef.current = trackKey;
+    fetchLyricsForTrack(data.title, data.artist, data.album, data.durationMs);
+  }, [data?.trackId, data?.title, data?.artist, data?.album, data?.durationMs, fetchLyricsForTrack]);
+
+  // Calculate active synced lyric line index based on localProgress
+  const activeLyricIndex = (() => {
+    if (!lyrics?.syncedLyrics || lyrics.syncedLyrics.length === 0) return -1;
+    let idx = -1;
+    for (let i = 0; i < lyrics.syncedLyrics.length; i++) {
+      if (localProgress + 200 >= lyrics.syncedLyrics[i].timeMs) {
+        idx = i;
+      } else {
+        break;
+      }
+    }
+    return idx;
+  })();
+
+  // Auto-scroll active lyric line into center of container
+  useEffect(() => {
+    if (!autoScrollLyrics) return;
+    if (activeTab !== "lyrics" && !(activeTab === "focus" && focusShowLyrics)) return;
+    if (activeLyricIndex >= 0 && activeLyricRef.current) {
+      activeLyricRef.current.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+  }, [activeLyricIndex, activeTab, autoScrollLyrics, focusShowLyrics]);
 
   // Live Search Debounce
   useEffect(() => {
@@ -883,6 +971,30 @@ export default function Player() {
                 <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
               </svg>
               <span>Mode Live Player</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab("lyrics");
+                setMobileMenuOpen(false);
+              }}
+              className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-semibold transition-colors cursor-pointer ${
+                activeTab === "lyrics"
+                  ? "bg-white/10 text-[#1DB954]"
+                  : "text-zinc-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <div className="flex items-center gap-3.5">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20H9c-.55 0-1 .45-1 1s.45 1 1 1h6c.55 0 1-.45 1-1s-.45-1-1-1h-2v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+                </svg>
+                <span>Lirik Lagu</span>
+              </div>
+              {lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 && (
+                <span className="text-[9px] font-bold uppercase tracking-wider bg-[#1DB954]/20 text-[#1DB954] px-1.5 py-0.5 rounded">
+                  Sync
+                </span>
+              )}
             </button>
           </div>
 
@@ -1569,7 +1681,7 @@ export default function Player() {
 
             {/* TAB: FOCUS / LIVE PLAYER VIEW */}
             {activeTab === "focus" && (
-              <div className="relative min-h-[70vh] rounded-2xl overflow-hidden flex flex-col items-center justify-center p-6 border border-white/5">
+              <div className="relative min-h-[75vh] rounded-2xl overflow-hidden flex flex-col lg:flex-row items-center justify-center p-6 sm:p-10 gap-8 border border-white/5">
                 {data?.albumImageUrl && (
                   <div
                     className="absolute inset-0 z-0 opacity-35 scale-110"
@@ -1581,8 +1693,8 @@ export default function Player() {
                     }}
                   />
                 )}
-                <div className="z-10 flex flex-col items-center text-center max-w-md w-full">
-                  <div className="w-64 h-64 sm:w-72 sm:h-72 rounded-2xl overflow-hidden shadow-2xl mb-6 border border-white/10">
+                <div className="z-10 flex flex-col items-center text-center max-w-md w-full shrink-0">
+                  <div className="w-60 h-60 sm:w-72 sm:h-72 rounded-2xl overflow-hidden shadow-2xl mb-6 border border-white/10">
                     {data?.albumImageUrl ? (
                       <img src={data.albumImageUrl} alt={data.album} className="w-full h-full object-cover" />
                     ) : (
@@ -1596,6 +1708,269 @@ export default function Player() {
                   <p className="text-xs text-[#1DB954] mt-2 uppercase tracking-widest font-semibold">
                     {data?.device?.name ? `Aktif di: ${data.device.name}` : "Siap Diputar"}
                   </p>
+                  <div className="flex items-center gap-2.5 mt-4">
+                    <button
+                      onClick={() => setFocusShowLyrics((prev) => !prev)}
+                      className={`text-xs font-semibold px-4 py-2 rounded-full border transition-all cursor-pointer ${
+                        focusShowLyrics
+                          ? "bg-[#1DB954]/20 border-[#1DB954] text-[#1DB954]"
+                          : "bg-white/10 border-white/10 text-zinc-300 hover:text-white"
+                      }`}
+                    >
+                      🎤 {focusShowLyrics ? "Sembunyikan Lirik" : "Tampilkan Lirik"}
+                    </button>
+                    <button
+                      onClick={() => setActiveTab("lyrics")}
+                      className="text-xs font-semibold px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer"
+                    >
+                      Layar Penuh Lirik ↗
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Lyrics Side Panel inside Focus Mode */}
+                {focusShowLyrics && data?.title && (
+                  <div className="z-10 flex-1 w-full max-w-xl bg-black/40 backdrop-blur-md border border-white/10 rounded-2xl p-5 sm:p-6 flex flex-col h-[52vh] lg:h-[62vh]">
+                    <div className="flex items-center justify-between pb-3 mb-3 border-b border-white/10">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wider text-[#1DB954]">
+                          Lirik Lagu
+                        </span>
+                        {lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 && (
+                          <span className="text-[10px] bg-[#1DB954]/20 text-[#1DB954] px-2 py-0.5 rounded-full font-semibold">
+                            Tersinkronisasi • Klik baris untuk lompat
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setAutoScrollLyrics((p) => !p)}
+                        className={`text-[11px] px-2.5 py-1 rounded-full font-semibold cursor-pointer transition-colors ${
+                          autoScrollLyrics
+                            ? "bg-[#1DB954] text-black"
+                            : "bg-white/10 text-zinc-300 hover:bg-white/20"
+                        }`}
+                      >
+                        {autoScrollLyrics ? "Auto-Scroll: ON" : "Auto-Scroll: OFF"}
+                      </button>
+                    </div>
+
+                    <div
+                      ref={lyricsContainerRef}
+                      className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar scroll-smooth"
+                    >
+                      {loadingLyrics ? (
+                        <div className="h-full flex flex-col items-center justify-center text-zinc-400 gap-2">
+                          <div className="w-7 h-7 border-3 border-t-[#1DB954] border-zinc-700 rounded-full animate-spin" />
+                          <span className="text-xs">Mencari lirik lagu...</span>
+                        </div>
+                      ) : lyrics?.instrumental ? (
+                        <div className="h-full flex items-center justify-center text-center text-zinc-400">
+                          <p className="text-base font-semibold">🎵 Lagu ini adalah Instrumental (Tanpa Vokal)</p>
+                        </div>
+                      ) : lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 ? (
+                        <div className="py-10 space-y-4">
+                          {lyrics.syncedLyrics.map((line, i) => {
+                            const isActive = i === activeLyricIndex;
+                            const isPassed = i < activeLyricIndex;
+                            return (
+                              <div
+                                key={`${line.timeMs}-${i}`}
+                                ref={isActive ? activeLyricRef : null}
+                                onClick={() => {
+                                  setLocalProgress(line.timeMs);
+                                  handleControl("seek", { value: line.timeMs });
+                                }}
+                                className={`cursor-pointer transition-all duration-300 rounded-xl px-3 py-1.5 ${
+                                  isActive
+                                    ? "text-white font-extrabold text-xl sm:text-2xl scale-[1.02] bg-white/[0.06] shadow-sm"
+                                    : isPassed
+                                    ? "text-zinc-500 font-semibold text-base sm:text-lg hover:text-zinc-300"
+                                    : "text-zinc-400 font-semibold text-base sm:text-lg hover:text-zinc-200"
+                                }`}
+                                title={`Lompat ke ${formatTime(line.timeMs)}`}
+                              >
+                                {line.text || "♪ • • •"}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : lyrics?.plainLyrics ? (
+                        <div className=" whitespace-pre-line text-zinc-200 text-base sm:text-lg leading-relaxed font-medium py-4">
+                          {lyrics.plainLyrics}
+                        </div>
+                      ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-center text-zinc-400 gap-2">
+                          <p className="text-sm font-semibold">Lirik belum ditemukan untuk lagu ini.</p>
+                          <button
+                            onClick={() =>
+                              fetchLyricsForTrack(data.title, data.artist, data.album, data.durationMs)
+                            }
+                            className="text-xs bg-white/10 hover:bg-white/20 text-white px-3.5 py-1.5 rounded-full cursor-pointer"
+                          >
+                            ↻ Coba Cari Ulang
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB: DEDICATED FULL LYRICS VIEW */}
+            {activeTab === "lyrics" && (
+              <div className="relative min-h-[75vh] rounded-2xl overflow-hidden flex flex-col p-5 sm:p-8 border border-white/10 bg-gradient-to-b from-emerald-950/30 via-[#121212] to-[#09090b]">
+                {data?.albumImageUrl && (
+                  <div
+                    className="absolute inset-0 z-0 opacity-25 scale-110 pointer-events-none"
+                    style={{
+                      backgroundImage: `url(${data.albumImageUrl})`,
+                      backgroundSize: "cover",
+                      backgroundPosition: "center",
+                      filter: "blur(70px)",
+                    }}
+                  />
+                )}
+
+                {/* Top Header inside Lyrics View */}
+                <div className="z-10 flex flex-wrap items-center justify-between gap-4 pb-5 mb-4 border-b border-white/10">
+                  <div className="flex items-center gap-4 min-w-0">
+                    {data?.albumImageUrl ? (
+                      <img
+                        src={data.albumImageUrl}
+                        alt={data.album}
+                        className="w-16 h-16 rounded-xl object-cover shadow-xl border border-white/10 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-16 h-16 rounded-xl bg-zinc-800 flex items-center justify-center text-2xl text-zinc-500 shrink-0">
+                        ♪
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold uppercase tracking-widest text-[#1DB954]">
+                          Mode Karaoke & Lirik
+                        </span>
+                        {lyrics?.source && (
+                          <span className="text-[10px] bg-white/10 text-zinc-300 px-2 py-0.5 rounded-full">
+                            Sumber: {lyrics.source}
+                          </span>
+                        )}
+                      </div>
+                      <h2 className="text-xl sm:text-2xl font-extrabold truncate mt-0.5">
+                        {data?.title || "Belum Ada Lagu yang Diputar"}
+                      </h2>
+                      <p className="text-xs sm:text-sm text-zinc-300 truncate">
+                        {data?.artist || "Putar lagu apa saja untuk melihat lirik secara otomatis"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 && (
+                      <button
+                        onClick={() => setAutoScrollLyrics((p) => !p)}
+                        className={`text-xs font-bold px-4 py-2 rounded-full transition-all cursor-pointer ${
+                          autoScrollLyrics
+                            ? "bg-[#1DB954] text-black shadow-lg"
+                            : "bg-white/10 text-zinc-300 hover:bg-white/20"
+                        }`}
+                      >
+                        {autoScrollLyrics ? "✓ Auto-Scroll Aktif" : "Auto-Scroll Mati"}
+                      </button>
+                    )}
+                    {data?.title && (
+                      <button
+                        onClick={() =>
+                          fetchLyricsForTrack(data.title, data.artist, data.album, data.durationMs)
+                        }
+                        className="text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-3.5 py-2 rounded-full transition-colors cursor-pointer"
+                        title="Muat ulang lirik"
+                      >
+                        ↻ Segarkan Lirik
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Main Lyrics Scroll Area */}
+                <div
+                  ref={lyricsContainerRef}
+                  className="z-10 flex-1 max-h-[58vh] overflow-y-auto px-2 sm:px-8 py-6 custom-scrollbar scroll-smooth"
+                >
+                  {!data?.title ? (
+                    <div className="h-56 flex flex-col items-center justify-center text-center text-zinc-400 gap-3">
+                      <p className="text-lg font-bold text-zinc-200">Belum ada lagu yang sedang diputar</p>
+                      <p className="text-xs text-zinc-400 max-w-md">
+                        Pilih dan putar lagu dari menu Beranda, Playlist, atau Pencarian untuk menampilkan lirik tersinkronisasi di sini.
+                      </p>
+                    </div>
+                  ) : loadingLyrics ? (
+                    <div className="h-56 flex flex-col items-center justify-center text-zinc-300 gap-3">
+                      <div className="w-9 h-9 border-4 border-t-[#1DB954] border-zinc-700 rounded-full animate-spin" />
+                      <p className="text-sm font-medium animate-pulse">
+                        Memuat lirik untuk &ldquo;{data.title}&rdquo;...
+                      </p>
+                    </div>
+                  ) : lyrics?.instrumental ? (
+                    <div className="h-56 flex flex-col items-center justify-center text-center text-zinc-300 gap-2">
+                      <span className="text-4xl">🎹</span>
+                      <p className="text-lg font-bold">Lagu Instrumental</p>
+                      <p className="text-xs text-zinc-400">Lagu ini tidak memiliki lirik vokal.</p>
+                    </div>
+                  ) : lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 ? (
+                    <div className="max-w-3xl mx-auto py-12 space-y-5">
+                      {lyrics.syncedLyrics.map((line, i) => {
+                        const isActive = i === activeLyricIndex;
+                        const isPassed = i < activeLyricIndex;
+                        return (
+                          <div
+                            key={`${line.timeMs}-${i}`}
+                            ref={isActive ? activeLyricRef : null}
+                            onClick={() => {
+                              setLocalProgress(line.timeMs);
+                              handleControl("seek", { value: line.timeMs });
+                            }}
+                            className={`group flex items-baseline justify-between gap-4 cursor-pointer transition-all duration-300 rounded-2xl px-4 py-2.5 ${
+                              isActive
+                                ? "text-[#1DB954] font-black text-2xl sm:text-4xl bg-white/[0.07] shadow-lg scale-[1.01]"
+                                : isPassed
+                                ? "text-zinc-500 font-bold text-lg sm:text-2xl hover:text-zinc-300 hover:bg-white/[0.03]"
+                                : "text-zinc-300/80 font-bold text-lg sm:text-2xl hover:text-white hover:bg-white/[0.03]"
+                            }`}
+                            title={`Klik untuk melompat ke menit ${formatTime(line.timeMs)}`}
+                          >
+                            <span className="leading-snug">{line.text || "♪ • • •"}</span>
+                            <span
+                              className={`text-xs font-mono shrink-0 transition-opacity ${
+                                isActive ? "opacity-100 text-[#1DB954]" : "opacity-0 group-hover:opacity-70 text-zinc-400"
+                              }`}
+                            >
+                              {formatTime(line.timeMs)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : lyrics?.plainLyrics ? (
+                    <div className="max-w-2xl mx-auto py-4">
+                      <div className="mb-4 inline-block text-[11px] bg-white/10 text-zinc-300 px-3 py-1 rounded-full">
+                        Lirik Teks Standar (Belum ada timestamp sinkronisasi untuk lagu ini)
+                      </div>
+                      <div className="whitespace-pre-line text-zinc-100 text-lg sm:text-2xl leading-relaxed font-semibold">
+                        {lyrics.plainLyrics}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-56 flex flex-col items-center justify-center text-center text-zinc-400 gap-3">
+                      <p className="text-base font-bold text-zinc-300">
+                        Maaf, lirik untuk &ldquo;{data.title}&rdquo; belum tersedia di database.
+                      </p>
+                      <p className="text-xs text-zinc-500 max-w-md">
+                        Pastikan judul lagu dan nama penyanyi sesuai, atau coba lagu lainnya.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1766,8 +2141,24 @@ export default function Player() {
           </div>
         </div>
 
-        {/* Right: Queue, Device Selector & Volume */}
-        <div className="flex items-center justify-end gap-3 w-1/4 relative">
+        {/* Right: Lyrics, Queue, Device Selector & Volume */}
+        <div className="flex items-center justify-end gap-2 sm:gap-3 w-1/4 relative">
+          {/* Lyrics Button (Spotify Mic Icon) */}
+          <button
+            onClick={() => setActiveTab(activeTab === "lyrics" ? "home" : "lyrics")}
+            className={`p-2 rounded-lg transition-colors cursor-pointer relative ${
+              activeTab === "lyrics" ? "text-[#1DB954] bg-white/10" : "text-zinc-400 hover:text-white"
+            }`}
+            title="Lirik Lagu (Karaoke)"
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20H9c-.55 0-1 .45-1 1s.45 1 1 1h6c.55 0 1-.45 1-1s-.45-1-1-1h-2v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+            </svg>
+            {lyrics?.found && !lyrics?.instrumental && (
+              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#1DB954]" />
+            )}
+          </button>
+
           {/* Queue Button */}
           <button
             onClick={() => setActiveTab(activeTab === "queue" ? "home" : "queue")}
