@@ -46,6 +46,21 @@ interface LyricsData {
 
 type ActiveTab = "home" | "search" | "liked" | "queue" | "playlist" | "album" | "artist" | "focus" | "lyrics";
 
+const GENRE_CARDS = [
+  { id: "pop", title: "Pop", query: "Pop", emoji: "🎤", bgGradient: "from-pink-600 to-rose-700" },
+  { id: "indie", title: "Indie", query: "Indie", emoji: "🎸", bgGradient: "from-emerald-600 to-teal-800" },
+  { id: "rock", title: "Rock", query: "Rock", emoji: "⚡", bgGradient: "from-red-600 to-orange-700" },
+  { id: "hiphop", title: "Hip-Hop", query: "Hip Hop", emoji: "🎧", bgGradient: "from-amber-600 to-yellow-700" },
+  { id: "rnb", title: "R&B", query: "R&B", emoji: "🎷", bgGradient: "from-blue-600 to-indigo-800" },
+  { id: "jazz", title: "Jazz", query: "Jazz", emoji: "🎺", bgGradient: "from-purple-600 to-violet-800" },
+  { id: "kpop", title: "K-Pop", query: "K-Pop", emoji: "✨", bgGradient: "from-teal-500 to-cyan-700" },
+  { id: "dangdut", title: "Dangdut", query: "Dangdut", emoji: "🪘", bgGradient: "from-fuchsia-600 to-purple-800" },
+  { id: "lofi", title: "Lofi Chill", query: "Lofi Chill", emoji: "☕", bgGradient: "from-slate-600 to-stone-800" },
+  { id: "acoustic", title: "Akustik", query: "Akustik", emoji: "🎶", bgGradient: "from-orange-500 to-amber-700" },
+  { id: "anime", title: "Anime & J-Pop", query: "Anime", emoji: "🌸", bgGradient: "from-rose-500 to-pink-700" },
+  { id: "dance", title: "Dance / EDM", query: "EDM", emoji: "🎛️", bgGradient: "from-violet-600 to-purple-900" },
+];
+
 export default function Player() {
   const { data: session, status } = useSession();
 
@@ -126,7 +141,10 @@ export default function Player() {
   const [loadingLyrics, setLoadingLyrics] = useState<boolean>(false);
   const [autoScrollLyrics, setAutoScrollLyrics] = useState<boolean>(true);
   const [focusShowLyrics, setFocusShowLyrics] = useState<boolean>(true);
+  const [isFullscreenLyrics, setIsFullscreenLyrics] = useState<boolean>(false);
   const lyricsContainerRef = useRef<HTMLDivElement | null>(null);
+  const fullscreenLyricsContainerRef = useRef<HTMLDivElement | null>(null);
+  const fullscreenActiveLyricRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLDivElement | null>(null);
   const lastFetchedTrackKeyRef = useRef<string>("");
 
@@ -216,21 +234,9 @@ export default function Player() {
         const serverQueue = Array.isArray(json.queue) ? json.queue : [];
         const spotifyNativeQueue = Array.isArray(json.spotify_queue) ? json.spotify_queue : [];
 
+        // Server adalah sumber kebenaran bersama (shared realtime session across all users)
         let authoritativeQueue = serverQueue;
-        if (typeof window !== "undefined") {
-          const savedRaw = localStorage.getItem("vantara_custom_queue");
-          if (savedRaw !== null) {
-            try {
-              const parsedLocal = JSON.parse(savedRaw);
-              if (Array.isArray(parsedLocal)) {
-                authoritativeQueue = parsedLocal;
-              }
-            } catch {}
-          }
-        }
 
-        // Jika antrean lokal masih kosong tetapi pemutar Spotify sedang memutar konteks dengan lagu berikutnya,
-        // otomatis masukkan ke antrean tunggal ini agar pengguna langsung melihat daftar antrean yang sesuai!
         if (authoritativeQueue.length === 0 && spotifyNativeQueue.length > 0) {
           authoritativeQueue = spotifyNativeQueue.map((t: any) => ({
             queueId: `${t.id || 't'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -247,11 +253,17 @@ export default function Player() {
             duration_ms: t.duration_ms || 0,
           }));
           saveLocalQueue(authoritativeQueue);
-          fetch("/api/spotify/queue", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "replace", queue: authoritativeQueue }),
-          }).catch(() => {});
+        } else if (authoritativeQueue.length === 0 && typeof window !== "undefined") {
+          // Fallback bila server kosong
+          const savedRaw = localStorage.getItem("vantara_custom_queue");
+          if (savedRaw) {
+            try {
+              const parsed = JSON.parse(savedRaw);
+              if (Array.isArray(parsed) && parsed.length > 0) authoritativeQueue = parsed;
+            } catch {}
+          }
+        } else {
+          saveLocalQueue(authoritativeQueue);
         }
 
         // Jika lagu yang baru saja mulai diputar di Spotify sama dengan lagu teratas di antrean,
@@ -415,7 +427,11 @@ export default function Player() {
     fetchDevices();
     fetchQueue();
 
-    const interval = setInterval(fetchNowPlaying, 3000);
+    // Polling realtime (Now Playing & Queue bersama) setiap 2.5 detik
+    const interval = setInterval(() => {
+      fetchNowPlaying();
+      fetchQueue();
+    }, 2500);
     return () => clearInterval(interval);
   }, [pinAuthenticated, session, fetchNowPlaying, fetchPlaylists, fetchHomeAndInitSdk, fetchDevices, fetchQueue]);
 
@@ -491,14 +507,21 @@ export default function Player() {
   // Auto-scroll active lyric line into center of container
   useEffect(() => {
     if (!autoScrollLyrics) return;
-    if (activeTab !== "lyrics" && !(activeTab === "focus" && focusShowLyrics)) return;
-    if (activeLyricIndex >= 0 && activeLyricRef.current) {
-      activeLyricRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
+    if (activeLyricIndex >= 0) {
+      if (activeLyricRef.current && (activeTab === "lyrics" || (activeTab === "focus" && focusShowLyrics))) {
+        activeLyricRef.current.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }
+      if (fullscreenActiveLyricRef.current && isFullscreenLyrics) {
+        fullscreenActiveLyricRef.current.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }
     }
-  }, [activeLyricIndex, activeTab, autoScrollLyrics, focusShowLyrics]);
+  }, [activeLyricIndex, activeTab, autoScrollLyrics, focusShowLyrics, isFullscreenLyrics]);
 
   // Live Search Debounce
   useEffect(() => {
@@ -563,6 +586,12 @@ export default function Player() {
       queueUris?: string[];
     }
   ) => {
+    // Mode PIN (GeoLab / Tamu): tidak bisa playback, next, previous (back), dan mengatur posisi menit lagunya
+    if (authMode === "geolab" && ["play", "pause", "next", "previous", "seek"].includes(action)) {
+      showToast("🔒 Mode PIN: Kontrol playback, skip lagu, dan menit dikendalikan oleh Host.", "info");
+      return;
+    }
+
     try {
       // Unlock browser audio context for Web Playback SDK if available
       if (playerRef.current?.activateElement) {
@@ -816,6 +845,10 @@ export default function Player() {
 
   // Play a specific item from inside the Queue (removes that item from Queue and keeps all other queued tracks in exact order!)
   const handlePlayFromQueue = async (index: number) => {
+    if (authMode === "geolab") {
+      showToast("🔒 Mode PIN: Memilih lagu untuk diputar langsung dinonaktifkan.", "info");
+      return;
+    }
     const target = queueData.queue[index];
     if (!target) return;
 
@@ -844,6 +877,12 @@ export default function Player() {
     if (data?.trackUri === trackUri && data?.isPlaying) {
       return;
     }
+    // Jika login menggunakan PIN, tidak bisa playback langsung, melainkan otomatis dimasukkan ke antrean
+    if (authMode === "geolab") {
+      handleAddToQueue(trackUri);
+      showToast("🔒 Mode PIN: Lagu ditambahkan ke antrean (hanya Host yang dapat memutar langsung).", "info");
+      return;
+    }
     handleControl("play", {
       uris: [trackUri],
       queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),
@@ -852,6 +891,10 @@ export default function Player() {
 
   // Play an entire playlist or album (and populate customQueue with its tracks in exact order!)
   const playContext = async (contextUri: string, tracksList?: any[]) => {
+    if (authMode === "geolab") {
+      showToast("🔒 Mode PIN: Pemutaran langsung dinonaktifkan. Gunakan tombol '+ Antrean' untuk menambah lagu.", "info");
+      return;
+    }
     if (Array.isArray(tracksList) && tracksList.length > 0) {
       const firstTrack = tracksList[0];
       const restTracks = tracksList.slice(1);
@@ -950,9 +993,13 @@ export default function Player() {
     }
   };
 
-  // Global Keyboard Shortcuts (Space = Play/Pause when not typing in input)
+  // Global Keyboard Shortcuts (Space = Play/Pause when not typing in input, Escape = Close Fullscreen)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Escape" && isFullscreenLyrics) {
+        setIsFullscreenLyrics(false);
+        return;
+      }
       if (!pinAuthenticated) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) {
@@ -960,12 +1007,16 @@ export default function Player() {
       }
       if (e.code === "Space") {
         e.preventDefault();
+        if (authMode === "geolab") {
+          showToast("🔒 Mode PIN: Kontrol playback dikendalikan oleh Host.", "info");
+          return;
+        }
         handleControl(data?.isPlaying ? "pause" : "play");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [pinAuthenticated, data?.isPlaying]);
+  }, [pinAuthenticated, data?.isPlaying, authMode, isFullscreenLyrics]);
 
   // Create New Playlist
   const handleCreatePlaylist = async (e: React.FormEvent) => {
@@ -1451,7 +1502,7 @@ export default function Player() {
                   onFocus={() => {
                     if (searchQuery.trim()) setActiveTab("search");
                   }}
-                  placeholder="Cari lagu, artis, atau album untuk diputar / ditambah..."
+                  placeholder="Cari lagu, artis, album, genre, atau playlist..."
                   className="w-full bg-zinc-800/90 hover:bg-zinc-800 focus:bg-zinc-800 text-sm text-white rounded-full py-2.5 pl-10 pr-9 outline-none focus:ring-2 focus:ring-[#1DB954] transition-all"
                 />
                 <svg
@@ -1706,26 +1757,18 @@ export default function Player() {
                   </div>
 
                   {/* Filter Pills */}
-                  <div className="flex items-center gap-2">
-                    {(authMode === "geolab"
-                      ? ([
-                          { id: "all", label: "Semua" },
-                          { id: "tracks", label: "Lagu" },
-                          { id: "artists", label: "Artis" },
-                          { id: "albums", label: "Album" },
-                        ] as const)
-                      : ([
-                          { id: "all", label: "Semua" },
-                          { id: "tracks", label: "Lagu" },
-                          { id: "artists", label: "Artis" },
-                          { id: "albums", label: "Album" },
-                          { id: "playlists", label: "Playlist" },
-                        ] as const)
-                    ).map((tab) => (
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full">
+                    {[
+                      { id: "all", label: "Semua" },
+                      { id: "tracks", label: "Lagu" },
+                      { id: "artists", label: "Artis" },
+                      { id: "albums", label: "Album" },
+                      { id: "playlists", label: "Playlist" },
+                    ].map((tab) => (
                       <button
                         key={tab.id}
-                        onClick={() => setSearchFilter(tab.id)}
-                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer ${
+                        onClick={() => setSearchFilter(tab.id as any)}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer shrink-0 ${
                           searchFilter === tab.id
                             ? "bg-[#1DB954] text-black"
                             : "bg-white/10 text-zinc-300 hover:bg-white/15"
@@ -1744,11 +1787,38 @@ export default function Player() {
                 )}
 
                 {!isSearching && !searchQuery.trim() && (
-                  <div className="py-16 text-center bg-white/[0.02] rounded-2xl border border-white/5">
-                    <p className="text-lg font-semibold text-zinc-300">Ketik judul lagu, nama penyanyi, atau album di atas</p>
-                    <p className="text-xs text-zinc-500 mt-1">
-                      Anda bisa memutar langsung, melihat profil artis, atau menambahkan lagu ke antrean & playlist.
-                    </p>
+                  <div className="space-y-6">
+                    <div className="bg-white/[0.02] rounded-2xl p-6 border border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-bold text-white">Jelajahi Genre & Kategori Musik</h3>
+                        <p className="text-xs text-zinc-400 mt-1">
+                          Pilih genre favorit di bawah ini atau cari judul lagu, artis, dan playlist langsung melalui kotak pencarian di atas.
+                        </p>
+                      </div>
+                      <span className="text-xs px-3 py-1 rounded-full bg-[#1DB954]/10 text-[#1DB954] border border-[#1DB954]/20 shrink-0 font-medium">
+                        Katalog Spotify Live
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5">
+                      {GENRE_CARDS.map((genre) => (
+                        <div
+                          key={genre.id}
+                          onClick={() => {
+                            setSearchQuery(genre.query);
+                            setSearchFilter("all");
+                          }}
+                          className={`relative h-28 sm:h-32 p-3.5 rounded-xl bg-gradient-to-br ${genre.bgGradient} cursor-pointer overflow-hidden group hover:scale-[1.03] transition-all shadow-md select-none`}
+                        >
+                          <span className="font-extrabold text-base sm:text-lg text-white leading-tight block">
+                            {genre.title}
+                          </span>
+                          <span className="absolute bottom-2 right-2 text-3xl sm:text-4xl opacity-80 group-hover:scale-110 group-hover:rotate-6 transition-transform">
+                            {genre.emoji}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -1860,9 +1930,8 @@ export default function Player() {
                         </section>
                       )}
 
-                    {/* Playlists Results (Only in Admin mode) */}
-                    {authMode === "admin" &&
-                      (searchFilter === "all" || searchFilter === "playlists") &&
+                    {/* Playlists Results */}
+                    {(searchFilter === "all" || searchFilter === "playlists") &&
                       searchResults.playlists.length > 0 && (
                         <section>
                           <h3 className="text-lg font-bold mb-3">Playlist Spotify</h3>
@@ -2535,6 +2604,10 @@ export default function Player() {
                                 key={`${line.timeMs}-${i}`}
                                 ref={isActive ? activeLyricRef : null}
                                 onClick={() => {
+                                  if (authMode === "geolab") {
+                                    showToast("🔒 Mode PIN: Mengatur posisi menit lagu dinonaktifkan.", "info");
+                                    return;
+                                  }
                                   setLocalProgress(line.timeMs);
                                   handleControl("seek", { value: line.timeMs });
                                 }}
@@ -2625,6 +2698,16 @@ export default function Player() {
                   </div>
 
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsFullscreenLyrics(true)}
+                      className="text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-3.5 py-2 rounded-full transition-colors cursor-pointer flex items-center gap-1.5"
+                      title="Tampilkan lirik satu layar penuh (Fullscreen Mode)"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                      </svg>
+                      <span>Layar Penuh</span>
+                    </button>
                     {lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 && (
                       <button
                         onClick={() => setAutoScrollLyrics((p) => !p)}
@@ -2686,6 +2769,10 @@ export default function Player() {
                             key={`${line.timeMs}-${i}`}
                             ref={isActive ? activeLyricRef : null}
                             onClick={() => {
+                              if (authMode === "geolab") {
+                                showToast("🔒 Mode PIN: Mengatur posisi menit lagu dinonaktifkan.", "info");
+                                return;
+                              }
                               setLocalProgress(line.timeMs);
                               handleControl("seek", { value: line.timeMs });
                             }}
@@ -3019,6 +3106,10 @@ export default function Player() {
                           <p
                             key={`${line.timeMs}-${i}`}
                             onClick={() => {
+                              if (authMode === "geolab") {
+                                showToast("🔒 Mode PIN: Mengatur posisi menit lagu dinonaktifkan.", "info");
+                                return;
+                              }
                               setLocalProgress(line.timeMs);
                               handleControl("seek", { value: line.timeMs });
                             }}
@@ -3116,11 +3207,22 @@ export default function Player() {
           <div className="flex items-center gap-5 mb-2">
             {/* Shuffle Button */}
             <button
-              onClick={() => handleControl("shuffle", { value: !data?.shuffleState })}
-              className={`transition-colors cursor-pointer ${
-                data?.shuffleState ? "text-[#1DB954]" : "text-zinc-400 hover:text-white"
+              onClick={() => {
+                if (authMode === "geolab") {
+                  showToast("🔒 Mode PIN: Fitur acak dikendalikan oleh Host.", "info");
+                  return;
+                }
+                handleControl("shuffle", { value: !data?.shuffleState });
+              }}
+              disabled={authMode === "geolab"}
+              className={`transition-colors ${
+                authMode === "geolab"
+                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
+                  : data?.shuffleState
+                  ? "text-[#1DB954] cursor-pointer"
+                  : "text-zinc-400 hover:text-white cursor-pointer"
               }`}
-              title="Acak (Shuffle)"
+              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : "Acak (Shuffle)"}
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
@@ -3129,9 +3231,20 @@ export default function Player() {
 
             {/* Previous */}
             <button
-              onClick={() => handleControl("previous")}
-              className="text-zinc-300 hover:text-white transition-colors cursor-pointer"
-              title="Sebelumnya"
+              onClick={() => {
+                if (authMode === "geolab") {
+                  showToast("🔒 Mode PIN: Kontrol pemutaran dikendalikan oleh Host.", "info");
+                  return;
+                }
+                handleControl("previous");
+              }}
+              disabled={authMode === "geolab"}
+              className={`transition-colors ${
+                authMode === "geolab"
+                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
+                  : "text-zinc-300 hover:text-white cursor-pointer"
+              }`}
+              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : "Sebelumnya"}
             >
               <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
@@ -3140,9 +3253,26 @@ export default function Player() {
 
             {/* Play / Pause */}
             <button
-              onClick={() => handleControl(data?.isPlaying ? "pause" : "play")}
-              className="w-10 h-10 bg-white hover:scale-105 text-black rounded-full flex items-center justify-center shadow-md transition-transform cursor-pointer"
-              title={data?.isPlaying ? "Pause (Spasi)" : "Play (Spasi)"}
+              onClick={() => {
+                if (authMode === "geolab") {
+                  showToast("🔒 Mode PIN: Kontrol playback dikendalikan oleh Host.", "info");
+                  return;
+                }
+                handleControl(data?.isPlaying ? "pause" : "play");
+              }}
+              disabled={authMode === "geolab"}
+              className={`w-10 h-10 rounded-full flex items-center justify-center shadow-md transition-all ${
+                authMode === "geolab"
+                  ? "bg-zinc-700 text-zinc-500 opacity-50 cursor-not-allowed"
+                  : "bg-white hover:scale-105 text-black cursor-pointer"
+              }`}
+              title={
+                authMode === "geolab"
+                  ? "🔒 Dikendalikan oleh Host"
+                  : data?.isPlaying
+                  ? "Pause (Spasi)"
+                  : "Play (Spasi)"
+              }
             >
               {data?.isPlaying ? (
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -3157,9 +3287,20 @@ export default function Player() {
 
             {/* Next */}
             <button
-              onClick={() => handleControl("next")}
-              className="text-zinc-300 hover:text-white transition-colors cursor-pointer"
-              title="Selanjutnya"
+              onClick={() => {
+                if (authMode === "geolab") {
+                  showToast("🔒 Mode PIN: Kontrol pemutaran dikendalikan oleh Host.", "info");
+                  return;
+                }
+                handleControl("next");
+              }}
+              disabled={authMode === "geolab"}
+              className={`transition-colors ${
+                authMode === "geolab"
+                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
+                  : "text-zinc-300 hover:text-white cursor-pointer"
+              }`}
+              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : "Selanjutnya"}
             >
               <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
@@ -3168,13 +3309,22 @@ export default function Player() {
 
             {/* Repeat Button */}
             <button
-              onClick={handleCycleRepeat}
-              className={`relative transition-colors cursor-pointer ${
-                data?.repeatState && data.repeatState !== "off"
-                  ? "text-[#1DB954]"
-                  : "text-zinc-400 hover:text-white"
+              onClick={() => {
+                if (authMode === "geolab") {
+                  showToast("🔒 Mode PIN: Fitur ulangi dikendalikan oleh Host.", "info");
+                  return;
+                }
+                handleCycleRepeat();
+              }}
+              disabled={authMode === "geolab"}
+              className={`relative transition-colors ${
+                authMode === "geolab"
+                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
+                  : data?.repeatState && data.repeatState !== "off"
+                  ? "text-[#1DB954] cursor-pointer"
+                  : "text-zinc-400 hover:text-white cursor-pointer"
               }`}
-              title={`Ulangi: ${data?.repeatState || "off"}`}
+              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : `Ulangi: ${data?.repeatState || "off"}`}
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" />
@@ -3197,20 +3347,37 @@ export default function Player() {
               min={0}
               max={data?.durationMs || 100}
               value={localProgress}
-              onMouseDown={() => setIsSeeking(true)}
-              onTouchStart={() => setIsSeeking(true)}
-              onChange={(e) => setLocalProgress( parseInt(e.target.value, 10) )}
+              disabled={authMode === "geolab"}
+              onMouseDown={() => {
+                if (authMode === "geolab") return;
+                setIsSeeking(true);
+              }}
+              onTouchStart={() => {
+                if (authMode === "geolab") return;
+                setIsSeeking(true);
+              }}
+              onChange={(e) => {
+                if (authMode === "geolab") return;
+                setLocalProgress(parseInt(e.target.value, 10));
+              }}
               onMouseUp={(e) => {
+                if (authMode === "geolab") return;
                 const val = parseInt((e.target as HTMLInputElement).value, 10);
                 setIsSeeking(false);
                 handleControl("seek", { value: val });
               }}
               onTouchEnd={(e) => {
+                if (authMode === "geolab") return;
                 const val = parseInt((e.target as HTMLInputElement).value, 10);
                 setIsSeeking(false);
                 handleControl("seek", { value: val });
               }}
-              className="flex-1 h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-[#1DB954]"
+              className={`flex-1 h-1.5 rounded-lg appearance-none ${
+                authMode === "geolab"
+                  ? "bg-zinc-800 cursor-not-allowed accent-zinc-600 opacity-50"
+                  : "bg-zinc-700 cursor-pointer accent-[#1DB954]"
+              }`}
+              title={authMode === "geolab" ? "🔒 Posisi menit lagu dikendalikan oleh Host" : "Atur menit pemutaran lagu"}
             />
             <span className="text-[11px] text-zinc-400 w-9 font-mono">
               {formatTime(data?.durationMs || 0)}
@@ -3387,6 +3554,171 @@ export default function Player() {
           </div>
         </div>
       </footer>
+
+      {/* FULLSCREEN LYRICS VIEW (Karaoke Mode - Spotify Style) */}
+      {isFullscreenLyrics && (
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col justify-between overflow-hidden select-none">
+          {/* Ambient Blurred Album Artwork */}
+          {data?.albumImageUrl && (
+            <div
+              className="absolute inset-0 z-0 opacity-30 scale-125 pointer-events-none transition-all duration-700"
+              style={{
+                backgroundImage: `url(${data.albumImageUrl})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+                filter: "blur(90px)",
+              }}
+            />
+          )}
+          <div className="absolute inset-0 z-0 bg-gradient-to-b from-black/60 via-black/40 to-black/85 pointer-events-none" />
+
+          {/* Top Header */}
+          <div className="relative z-10 flex items-center justify-between px-6 sm:px-12 py-6 border-b border-white/5">
+            <div className="flex items-center gap-4 min-w-0">
+              {data?.albumImageUrl ? (
+                <img
+                  src={data.albumImageUrl}
+                  alt={data.album || "Album"}
+                  className="w-14 h-14 rounded-xl object-cover shadow-2xl border border-white/10 shrink-0"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-xl bg-zinc-800 flex items-center justify-center text-xl text-zinc-500 shrink-0">
+                  ♪
+                </div>
+              )}
+              <div className="min-w-0">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#1DB954] block">
+                  Layar Penuh • Karaoke
+                </span>
+                <h2 className="text-lg sm:text-xl font-black text-white truncate max-w-md sm:max-w-xl">
+                  {data?.title || "Belum Ada Lagu yang Diputar"}
+                </h2>
+                <p className="text-xs sm:text-sm text-zinc-300 truncate max-w-md sm:max-w-xl">
+                  {data?.artist || "Spotify"} {data?.album ? `• ${data.album}` : ""}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              {lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 && (
+                <button
+                  onClick={() => setAutoScrollLyrics((p) => !p)}
+                  className={`text-xs font-bold px-4 py-2 rounded-full transition-all cursor-pointer ${
+                    autoScrollLyrics
+                      ? "bg-[#1DB954] text-black shadow-lg"
+                      : "bg-white/10 text-zinc-300 hover:bg-white/20"
+                  }`}
+                >
+                  {autoScrollLyrics ? "✓ Auto-Scroll" : "Auto-Scroll Mati"}
+                </button>
+              )}
+              <button
+                onClick={() => setIsFullscreenLyrics(false)}
+                className="bg-white/10 hover:bg-white/20 text-white p-2.5 rounded-full transition-all cursor-pointer hover:scale-105 flex items-center justify-center"
+                title="Keluar dari Layar Penuh (Esc)"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Centered Scrollable Lyrics Stream */}
+          <div
+            ref={fullscreenLyricsContainerRef}
+            className="relative z-10 flex-1 overflow-y-auto px-6 sm:px-16 md:px-24 py-12 custom-scrollbar scroll-smooth flex flex-col"
+          >
+            {!data?.title ? (
+              <div className="m-auto text-center text-zinc-400 space-y-2">
+                <p className="text-2xl font-bold text-zinc-200">Belum ada lagu yang sedang diputar</p>
+                <p className="text-sm text-zinc-500">Putar lagu dari aplikasi atau katalog untuk memunculkan lirik di sini.</p>
+              </div>
+            ) : loadingLyrics ? (
+              <div className="m-auto text-center text-zinc-300 flex flex-col items-center gap-4">
+                <div className="w-12 h-12 border-4 border-t-[#1DB954] border-zinc-700 rounded-full animate-spin" />
+                <p className="text-lg font-medium animate-pulse">Memuat lirik...</p>
+              </div>
+            ) : lyrics?.instrumental ? (
+              <div className="m-auto text-center text-zinc-300 space-y-3">
+                <span className="text-6xl">🎹</span>
+                <p className="text-2xl font-bold">Lagu Instrumental</p>
+                <p className="text-sm text-zinc-400">Lagu ini tidak memiliki lirik vokal.</p>
+              </div>
+            ) : lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 ? (
+              <div className="max-w-4xl mx-auto w-full py-20 space-y-8 sm:space-y-10 text-left">
+                {lyrics.syncedLyrics.map((line, i) => {
+                  const isActive = i === activeLyricIndex;
+                  const isPassed = i < activeLyricIndex;
+                  return (
+                    <div
+                      key={`fs-${line.timeMs}-${i}`}
+                      ref={isActive ? fullscreenActiveLyricRef : null}
+                      onClick={() => {
+                        if (authMode === "geolab") {
+                          showToast("🔒 Mode PIN: Mengatur posisi menit lagu dinonaktifkan.", "info");
+                          return;
+                        }
+                        setLocalProgress(line.timeMs);
+                        handleControl("seek", { value: line.timeMs });
+                      }}
+                      className={`cursor-pointer transition-all duration-300 ${
+                        isActive
+                          ? "text-[#1DB954] font-black text-3xl sm:text-5xl md:text-6xl scale-[1.02] origin-left drop-shadow-xl"
+                          : isPassed
+                          ? "text-zinc-600 font-bold text-2xl sm:text-4xl md:text-5xl hover:text-zinc-400"
+                          : "text-zinc-400/70 font-bold text-2xl sm:text-4xl md:text-5xl hover:text-zinc-200"
+                      }`}
+                      title={authMode === "geolab" ? undefined : `Klik untuk melompat ke ${formatTime(line.timeMs)}`}
+                    >
+                      {line.text || "♪ • • •"}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : lyrics?.plainLyrics ? (
+              <div className="max-w-3xl mx-auto w-full py-16 text-center whitespace-pre-line text-zinc-200 text-2xl sm:text-4xl font-bold leading-relaxed">
+                {lyrics.plainLyrics}
+              </div>
+            ) : (
+              <div className="m-auto text-center text-zinc-400 space-y-2">
+                <p className="text-xl font-bold text-zinc-300">Lirik belum tersedia untuk lagu ini</p>
+                <p className="text-xs text-zinc-500">Database belum memiliki lirik untuk trek &ldquo;{data.title}&rdquo;.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Bottom Bar */}
+          <div className="relative z-10 px-8 py-5 bg-gradient-to-t from-black via-black/80 to-transparent flex items-center justify-between border-t border-white/5">
+            <div className="text-xs text-zinc-400 font-mono">
+              {formatTime(localProgress)} / {formatTime(data?.durationMs || 0)}
+            </div>
+
+            <div className="flex items-center gap-4">
+              {authMode === "admin" && (
+                <button
+                  onClick={() => handleControl(data?.isPlaying ? "pause" : "play")}
+                  className="w-10 h-10 bg-white hover:scale-105 text-black rounded-full flex items-center justify-center shadow-lg transition-transform cursor-pointer"
+                  title={data?.isPlaying ? "Pause (Spasi)" : "Play (Spasi)"}
+                >
+                  {data?.isPlaying ? (
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  )}
+                </button>
+              )}
+              <span className="text-xs text-zinc-500 hidden sm:inline">
+                Tekan <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-zinc-300 font-mono">Esc</kbd> untuk keluar
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: CREATE NEW PLAYLIST */}
       {showCreateModal && (

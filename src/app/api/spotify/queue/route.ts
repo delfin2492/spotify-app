@@ -70,6 +70,15 @@ export async function GET() {
       spotifyQueue = Array.isArray(data.queue) ? data.queue : [];
     }
 
+    // If customQueue is empty but Spotify has upcoming tracks from current context,
+    // adopt Spotify's native queue so all users immediately share the active queue session
+    if (customQueue.length === 0 && spotifyQueue.length > 0) {
+      customQueue = spotifyQueue
+        .map((t: any) => normalizeTrackToQueueItem(t))
+        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
+      savePersistedQueue(customQueue, true);
+    }
+
     // If the currently playing song matches the first item in customQueue (e.g. Spotify naturally advanced to the next song), pop it automatically
     if (
       currentlyPlaying?.uri &&
