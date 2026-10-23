@@ -861,21 +861,23 @@ export default function Player() {
     }
   };
 
-  // Play a specific item from inside the Queue (removes that item from Queue and keeps all other queued tracks in exact order!)
+  // Play a specific item from inside the Queue:
+  // Jika user memutar lagu pada antrean yang tidak sesuai urutan, maka lagu tersebut dan semua urutan di atasnya akan hilang
   const handlePlayFromQueue = async (index: number) => {
     const target = queueData.queue[index];
     if (!target) return;
 
-    const remainingQueue = queueData.queue.filter((_, idx) => idx !== index);
+    // Ambil lagu-lagu di bawahnya saja, buang lagu target dan semua urutan lagu di atasnya
+    const remainingQueue = queueData.queue.slice(index + 1);
     lastQueueMutationTimeRef.current = Date.now();
     lastAddedQueueIdRef.current = "";
     setQueueData((prev) => ({ ...prev, queue: remainingQueue }));
     saveLocalQueue(remainingQueue);
 
     await fetch("/api/spotify/queue", {
-      method: "DELETE",
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ queueId: target.queueId, index }),
+      body: JSON.stringify({ action: "replace", queue: remainingQueue }),
     });
 
     // Play target song and pass remainingQueue URIs explicitly
@@ -893,9 +895,26 @@ export default function Player() {
     if (data?.trackUri === trackUri && data?.isPlaying) {
       return;
     }
+
+    // Jika lagu yang dimainkan ada di dalam antrean (misal di urutan ke-X), buang lagu tersebut dan semua urutan di atasnya
+    const queueIndex = queueData.queue.findIndex((item) => item?.uri === trackUri);
+    let remainingQueue = queueData.queue;
+    if (queueIndex >= 0) {
+      remainingQueue = queueData.queue.slice(queueIndex + 1);
+      lastQueueMutationTimeRef.current = Date.now();
+      lastAddedQueueIdRef.current = "";
+      setQueueData((prev) => ({ ...prev, queue: remainingQueue }));
+      saveLocalQueue(remainingQueue);
+      fetch("/api/spotify/queue", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "replace", queue: remainingQueue }),
+      }).catch(() => {});
+    }
+
     handleControl("play", {
       uris: [trackUri],
-      queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),
+      queueUris: remainingQueue.map((item) => item?.uri).filter(Boolean),
     });
   };
 
