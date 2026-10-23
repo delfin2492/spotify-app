@@ -10,8 +10,42 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const section = searchParams.get('section') || 'home';
+  const artistId = searchParams.get('artistId');
 
   try {
+    if (artistId) {
+      const [artistRes, topTracksRes, albumsRes] = await Promise.all([
+        fetch(`https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          cache: 'no-store',
+        }),
+        fetch(
+          `https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/top-tracks?market=ID`,
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: 'no-store',
+          }
+        ),
+        fetch(
+          `https://api.spotify.com/v1/artists/${encodeURIComponent(artistId)}/albums?include_groups=album,single&limit=10`,
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: 'no-store',
+          }
+        ),
+      ]);
+
+      const artist = artistRes.ok ? await artistRes.json() : null;
+      const topTracksData = topTracksRes.ok ? await topTracksRes.json() : { tracks: [] };
+      const albumsData = albumsRes.ok ? await albumsRes.json() : { items: [] };
+
+      return NextResponse.json({
+        artist,
+        topTracks: topTracksData.tracks || [],
+        albums: albumsData.items || [],
+      });
+    }
+
     if (section === 'liked') {
       const likedRes = await fetch('https://api.spotify.com/v1/me/tracks?limit=50', {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -30,9 +64,13 @@ export async function GET(req: Request) {
       });
     }
 
-    // Fetch Top Tracks & Recently Played in parallel for Home dashboard
-    const [topRes, recentRes, meRes] = await Promise.all([
+    // Fetch Top Tracks, Top Artists, & Recently Played in parallel for Home dashboard
+    const [topRes, topArtistsRes, recentRes, meRes] = await Promise.all([
       fetch('https://api.spotify.com/v1/me/top/tracks?limit=12&time_range=short_term', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: 'no-store',
+      }),
+      fetch('https://api.spotify.com/v1/me/top/artists?limit=6&time_range=short_term', {
         headers: { Authorization: `Bearer ${accessToken}` },
         cache: 'no-store',
       }),
@@ -47,6 +85,7 @@ export async function GET(req: Request) {
     ]);
 
     const topData = topRes.ok ? await topRes.json() : { items: [] };
+    const topArtistsData = topArtistsRes.ok ? await topArtistsRes.json() : { items: [] };
     const recentData = recentRes.ok ? await recentRes.json() : { items: [] };
     const meData = meRes.ok ? await meRes.json() : null;
 
@@ -62,6 +101,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       topTracks: topData.items || [],
+      topArtists: topArtistsData.items || [],
       recentTracks,
       profile: meData,
       accessToken, // Useful for initializing Web Playback SDK in browser

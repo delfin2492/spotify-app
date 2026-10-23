@@ -37,7 +37,10 @@ export async function GET() {
     const trackUri = state.item.uri;
     const title = state.item.name;
     const artist = state.item.artists.map((_artist: any) => _artist.name).join(', ');
+    const artistId = state.item.artists?.[0]?.id || '';
+    const artists = (state.item.artists || []).map((a: any) => ({ id: a.id, name: a.name }));
     const album = state.item.album.name;
+    const albumId = state.item.album.id || '';
     const albumImageUrl = state.item.album.images?.[0]?.url || '';
     const songUrl = state.item.external_urls?.spotify || '#';
     const progressMs = state.progress_ms || 0;
@@ -50,8 +53,11 @@ export async function GET() {
       trackId,
       trackUri,
       album,
+      albumId,
       albumImageUrl,
       artist,
+      artistId,
+      artists,
       isPlaying,
       songUrl,
       title,

@@ -16,8 +16,11 @@ interface NowPlaying {
   trackId?: string;
   trackUri?: string;
   album: string;
+  albumId?: string;
   albumImageUrl: string;
   artist: string;
+  artistId?: string;
+  artists?: { id: string; name: string }[];
   isPlaying: boolean;
   songUrl: string;
   title: string;
@@ -41,7 +44,7 @@ interface LyricsData {
   source?: string;
 }
 
-type ActiveTab = "home" | "search" | "liked" | "queue" | "playlist" | "album" | "focus" | "lyrics";
+type ActiveTab = "home" | "search" | "liked" | "queue" | "playlist" | "album" | "artist" | "focus" | "lyrics";
 
 export default function Player() {
   const { data: session, status } = useSession();
@@ -65,6 +68,7 @@ export default function Player() {
 
   // Browse / Home Data
   const [topTracks, setTopTracks] = useState<any[]>([]);
+  const [topArtists, setTopArtists] = useState<any[]>([]);
   const [recentTracks, setRecentTracks] = useState<any[]>([]);
   const [playlists, setPlaylists] = useState<any[]>([]);
   const [likedTracks, setLikedTracks] = useState<any[]>([]);
@@ -80,10 +84,19 @@ export default function Player() {
   const [devices, setDevices] = useState<SpotifyDevice[]>([]);
   const [showDevicesMenu, setShowDevicesMenu] = useState<boolean>(false);
 
-  // Selected Playlist / Album Detail
+  // Selected Playlist / Album / Artist Detail + Right Panel
   const [selectedPlaylist, setSelectedPlaylist] = useState<any | null>(null);
   const [selectedAlbum, setSelectedAlbum] = useState<any | null>(null);
+  const [selectedArtist, setSelectedArtist] = useState<{
+    artist: any;
+    topTracks: any[];
+    albums: any[];
+  } | null>(null);
   const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
+  const [playlistFilter, setPlaylistFilter] = useState<string>("");
+  const [playlistSort, setPlaylistSort] = useState<"default" | "title" | "artist" | "duration">("default");
+  const [rightSidebarMode, setRightSidebarMode] = useState<"now-playing" | "queue" | "lyrics" | "closed">("now-playing");
+  const [previousVolume, setPreviousVolume] = useState<number>(70);
 
   // Search State
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -174,6 +187,7 @@ export default function Player() {
       if (res.ok) {
         const json = await res.json();
         setTopTracks(json.topTracks || []);
+        setTopArtists(json.topArtists || []);
         setRecentTracks(json.recentTracks || []);
 
         if (json.accessToken && typeof window !== "undefined" && !playerRef.current) {
@@ -847,6 +861,7 @@ export default function Player() {
 
   // Open Album Detail
   const openAlbum = async (albumId: string) => {
+    if (!albumId) return;
     setLoadingDetail(true);
     setActiveTab("album");
     try {
@@ -861,6 +876,58 @@ export default function Player() {
       setLoadingDetail(false);
     }
   };
+
+  // Open Artist Profile Detail (Spotify Artist Page)
+  const openArtist = async (artistId: string) => {
+    if (!artistId) return;
+    setLoadingDetail(true);
+    setActiveTab("artist");
+    try {
+      const res = await fetch(`/api/spotify/browse?artistId=${encodeURIComponent(artistId)}`);
+      if (res.ok) {
+        const json = await res.json();
+        setSelectedArtist({
+          artist: json.artist,
+          topTracks: json.topTracks || [],
+          albums: json.albums || [],
+        });
+      }
+    } catch (e) {
+      showToast("Gagal memuat profil artis", "error");
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
+  // Toggle Mute / Unmute like Spotify Desktop
+  const handleToggleMute = () => {
+    if (volume > 0) {
+      setPreviousVolume(volume);
+      setVolume(0);
+      handleControl("volume", { value: 0 });
+    } else {
+      const restored = previousVolume > 0 ? previousVolume : 70;
+      setVolume(restored);
+      handleControl("volume", { value: restored });
+    }
+  };
+
+  // Global Keyboard Shortcuts (Space = Play/Pause when not typing in input)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!pinAuthenticated) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) {
+        return;
+      }
+      if (e.code === "Space") {
+        e.preventDefault();
+        handleControl(data?.isPlaying ? "pause" : "play");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pinAuthenticated, data?.isPlaying]);
 
   // Create New Playlist
   const handleCreatePlaylist = async (e: React.FormEvent) => {
@@ -1408,12 +1475,19 @@ export default function Player() {
             {/* TAB: HOME */}
             {activeTab === "home" && (
               <div className="space-y-8">
-                {/* Quick Playlists Grid */}
-                {playlists.length > 0 && (
-                  <section>
-                    <h2 className="text-xl sm:text-2xl font-bold mb-4">
-                      {authMode === "geolab" ? "Playlist Resmi GeoLab" : "Koleksi & Playlist Cepat"}
-                    </h2>
+                {/* Spotify Time-of-Day Greeting + Quick Access */}
+                <section>
+                  <h2 className="text-2xl sm:text-3xl font-extrabold mb-4 tracking-tight">
+                    {(() => {
+                      const h = new Date().getHours();
+                      if (h < 11) return "Selamat Pagi";
+                      if (h < 15) return "Selamat Siang";
+                      if (h < 18) return "Selamat Sore";
+                      return "Selamat Malam";
+                    })()}
+                  </h2>
+
+                  {playlists.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       {playlists.slice(0, 6).map((pl) => (
                         <div
@@ -1442,6 +1516,49 @@ export default function Player() {
                         </div>
                       ))}
                     </div>
+                  )}
+                </section>
+
+                {/* Top Artists Section (Spotify Round Cards) */}
+                {topArtists.length > 0 && (
+                  <section>
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h2 className="text-xl font-bold">Artis Teratas Anda</h2>
+                        <p className="text-xs text-zinc-400">Klik artis untuk melihat lagu populer & diskografi album</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                      {topArtists.slice(0, 6).map((artist) => (
+                        <div
+                          key={artist.id}
+                          onClick={() => openArtist(artist.id)}
+                          className="bg-[#181818] hover:bg-[#282828] transition-all p-4 rounded-xl group cursor-pointer flex flex-col items-center text-center"
+                        >
+                          <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full overflow-hidden mb-3 shadow-xl">
+                            <img
+                              src={artist.images?.[0]?.url || "https://placehold.co/200x200/27272a/white?text=Artis"}
+                              alt={artist.name}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                playContext(artist.uri);
+                              }}
+                              className="absolute bottom-1.5 right-1.5 w-10 h-10 rounded-full bg-[#1DB954] text-black flex items-center justify-center opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-xl hover:scale-105 cursor-pointer"
+                              title={`Putar lagu ${artist.name}`}
+                            >
+                              <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            </button>
+                          </div>
+                          <h3 className="font-bold text-sm truncate w-full text-white">{artist.name}</h3>
+                          <p className="text-[11px] text-zinc-400 mt-0.5">Artis</p>
+                        </div>
+                      ))}
+                    </div>
                   </section>
                 )}
 
@@ -1450,7 +1567,7 @@ export default function Player() {
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h2 className="text-xl font-bold">Lagu Teratas Anda</h2>
-                      <p className="text-xs text-zinc-400">Klik lagu untuk langsung memutar atau tambahkan ke playlist</p>
+                      <p className="text-xs text-zinc-400">Klik lagu untuk langsung memutar atau tambahkan ke antrean/playlist</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
@@ -1464,7 +1581,8 @@ export default function Player() {
                             <img
                               src={track.album?.images?.[0]?.url || ""}
                               alt={track.name}
-                              className="w-full h-full object-cover"
+                              onClick={() => playTrack(track.uri)}
+                              className="w-full h-full object-cover cursor-pointer"
                             />
                             <button
                               onClick={() => playTrack(track.uri)}
@@ -1476,10 +1594,17 @@ export default function Player() {
                               </svg>
                             </button>
                           </div>
-                          <h3 className="font-semibold text-sm truncate text-white" title={track.name}>
+                          <h3
+                            onClick={() => playTrack(track.uri)}
+                            className="font-semibold text-sm truncate text-white hover:underline cursor-pointer"
+                            title={track.name}
+                          >
                             {track.name}
                           </h3>
-                          <p className="text-xs text-zinc-400 truncate mt-0.5">
+                          <p
+                            onClick={() => track.artists?.[0]?.id && openArtist(track.artists[0].id)}
+                            className="text-xs text-zinc-400 hover:text-white hover:underline truncate mt-0.5 cursor-pointer"
+                          >
                             {track.artists?.map((a: any) => a.name).join(", ")}
                           </p>
                         </div>
@@ -1517,9 +1642,12 @@ export default function Player() {
                           track={track}
                           isCurrent={data?.trackId === track.id}
                           onPlay={() => playTrack(track.uri)}
+                          onPlayNext={() => handleAddToQueue(track, "top")}
                           onQueue={() => handleAddToQueue(track)}
                           onAddToPlaylist={() => setTrackToAdd(track)}
                           onLike={() => handleToggleLike(track.id, "save")}
+                          onArtistClick={(artistId) => openArtist(artistId)}
+                          onAlbumClick={(albumId) => openAlbum(albumId)}
                         />
                       ))}
                     </div>
@@ -1535,7 +1663,7 @@ export default function Player() {
                   <div>
                     <h2 className="text-2xl font-bold">Pencarian Katalog Spotify</h2>
                     <p className="text-xs text-zinc-400">
-                      Cari lagu apa saja dari Spotify untuk diputar, dimasukkan ke antrean, atau ditambahkan ke playlist
+                      Cari lagu, artis, atau album dari Spotify untuk diputar, dimasukkan ke antrean, atau ditambahkan ke playlist
                     </p>
                   </div>
 
@@ -1545,11 +1673,13 @@ export default function Player() {
                       ? ([
                           { id: "all", label: "Semua" },
                           { id: "tracks", label: "Lagu" },
+                          { id: "artists", label: "Artis" },
                           { id: "albums", label: "Album" },
                         ] as const)
                       : ([
                           { id: "all", label: "Semua" },
                           { id: "tracks", label: "Lagu" },
+                          { id: "artists", label: "Artis" },
                           { id: "albums", label: "Album" },
                           { id: "playlists", label: "Playlist" },
                         ] as const)
@@ -1579,7 +1709,7 @@ export default function Player() {
                   <div className="py-16 text-center bg-white/[0.02] rounded-2xl border border-white/5">
                     <p className="text-lg font-semibold text-zinc-300">Ketik judul lagu, nama penyanyi, atau album di atas</p>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Anda bisa memutar langsung atau menambahkan lagu ke playlist pribadi Anda.
+                      Anda bisa memutar langsung, melihat profil artis, atau menambahkan lagu ke antrean & playlist.
                     </p>
                   </div>
                 )}
@@ -1599,10 +1729,54 @@ export default function Player() {
                                 track={track}
                                 isCurrent={data?.trackId === track.id}
                                 onPlay={() => playTrack(track.uri)}
+                                onPlayNext={() => handleAddToQueue(track, "top")}
                                 onQueue={() => handleAddToQueue(track)}
                                 onAddToPlaylist={() => setTrackToAdd(track)}
                                 onLike={() => handleToggleLike(track.id, "save")}
+                                onArtistClick={(artistId) => openArtist(artistId)}
+                                onAlbumClick={(albumId) => openAlbum(albumId)}
                               />
+                            ))}
+                          </div>
+                        </section>
+                      )}
+
+                    {/* Artists Results */}
+                    {(searchFilter === "all" || searchFilter === "artists") &&
+                      searchResults.artists.length > 0 && (
+                        <section>
+                          <h3 className="text-lg font-bold mb-3">Artis</h3>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                            {searchResults.artists.slice(0, 10).map((artist: any) => (
+                              <div
+                                key={artist.id}
+                                onClick={() => openArtist(artist.id)}
+                                className="bg-[#181818] hover:bg-[#282828] p-4 rounded-xl cursor-pointer transition-all group flex flex-col items-center text-center"
+                              >
+                                <div className="relative w-28 h-28 rounded-full overflow-hidden mb-3 shadow-lg">
+                                  <img
+                                    src={
+                                      artist.images?.[0]?.url ||
+                                      "https://placehold.co/200x200/27272a/white?text=Artis"
+                                    }
+                                    alt={artist.name}
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                                  />
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      playContext(artist.uri);
+                                    }}
+                                    className="absolute bottom-1 right-1 w-10 h-10 rounded-full bg-[#1DB954] text-black flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg cursor-pointer"
+                                  >
+                                    <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
+                                      <path d="M8 5v14l11-7z" />
+                                    </svg>
+                                  </button>
+                                </div>
+                                <p className="font-bold text-sm truncate w-full">{artist.name}</p>
+                                <p className="text-xs text-zinc-400 mt-0.5">Artis</p>
+                              </div>
                             ))}
                           </div>
                         </section>
@@ -1958,7 +2132,7 @@ export default function Player() {
                           {selectedPlaylist.tracks?.total || 0} lagu
                         </p>
                       </div>
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex flex-wrap items-center gap-2.5">
                         <button
                           onClick={() =>
                             playContext(
@@ -1979,24 +2153,92 @@ export default function Player() {
                       </div>
                     </div>
 
+                    {/* Spotify-style In-Playlist Filter & Sort Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+                      <div className="relative w-full sm:w-72">
+                        <input
+                          type="text"
+                          value={playlistFilter}
+                          onChange={(e) => setPlaylistFilter(e.target.value)}
+                          placeholder="Cari di dalam playlist ini..."
+                          className="w-full bg-white/5 hover:bg-white/10 focus:bg-zinc-800 text-xs text-white rounded-lg py-2 pl-8 pr-7 outline-none border border-white/10 focus:border-[#1DB954]"
+                        />
+                        <svg
+                          className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2"
+                          fill="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+                        </svg>
+                        {playlistFilter && (
+                          <button
+                            onClick={() => setPlaylistFilter("")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs text-zinc-400">
+                        <span>Urutkan:</span>
+                        <select
+                          value={playlistSort}
+                          onChange={(e) => setPlaylistSort(e.target.value as any)}
+                          className="bg-zinc-900 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white outline-none focus:border-[#1DB954] cursor-pointer"
+                        >
+                          <option value="default">Urutan Asli</option>
+                          <option value="title">Judul Lagu (A-Z)</option>
+                          <option value="artist">Nama Artis (A-Z)</option>
+                          <option value="duration">Durasi Terpanjang</option>
+                        </select>
+                      </div>
+                    </div>
+
                     <div className="bg-white/[0.03] rounded-xl border border-white/5 divide-y divide-white/5">
-                      {(selectedPlaylist.tracks?.items || []).map((item: any, idx: number) =>
-                        item.track ? (
+                      {(() => {
+                        const rawItems = (selectedPlaylist.tracks?.items || [])
+                          .map((item: any, idx: number) => ({ track: item.track, originalIndex: idx + 1 }))
+                          .filter((x: any) => Boolean(x.track));
+
+                        const filtered = rawItems.filter(({ track }: any) => {
+                          if (!playlistFilter.trim()) return true;
+                          const q = playlistFilter.toLowerCase();
+                          const tName = (track.name || "").toLowerCase();
+                          const aName = (track.artists || []).map((a: any) => a.name).join(" ").toLowerCase();
+                          const alName = (track.album?.name || "").toLowerCase();
+                          return tName.includes(q) || aName.includes(q) || alName.includes(q);
+                        });
+
+                        if (playlistSort === "title") {
+                          filtered.sort((a: any, b: any) => (a.track.name || "").localeCompare(b.track.name || ""));
+                        } else if (playlistSort === "artist") {
+                          filtered.sort((a: any, b: any) =>
+                            (a.track.artists?.[0]?.name || "").localeCompare(b.track.artists?.[0]?.name || "")
+                          );
+                        } else if (playlistSort === "duration") {
+                          filtered.sort((a: any, b: any) => (b.track.duration_ms || 0) - (a.track.duration_ms || 0));
+                        }
+
+                        return filtered.map(({ track, originalIndex }: any, idx: number) => (
                           <TrackRow
-                            key={`${item.track.id}-${idx}`}
+                            key={`${track.id}-${originalIndex}-${idx}`}
                             index={idx + 1}
-                            track={item.track}
-                            isCurrent={data?.trackId === item.track.id}
-                            onPlay={() => playTrack(item.track.uri)}
-                            onQueue={() => handleAddToQueue(item.track)}
-                            onAddToPlaylist={() => setTrackToAdd(item.track)}
+                            track={track}
+                            isCurrent={data?.trackId === track.id}
+                            onPlay={() => playTrack(track.uri)}
+                            onPlayNext={() => handleAddToQueue(track, "top")}
+                            onQueue={() => handleAddToQueue(track)}
+                            onAddToPlaylist={() => setTrackToAdd(track)}
+                            onArtistClick={(artistId) => openArtist(artistId)}
+                            onAlbumClick={(albumId) => openAlbum(albumId)}
                             onRemove={() =>
-                              handleRemoveTrackFromPlaylist(selectedPlaylist.id, item.track.uri)
+                              handleRemoveTrackFromPlaylist(selectedPlaylist.id, track.uri)
                             }
                             removeLabel="Hapus"
                           />
-                        ) : null
-                      )}
+                        ));
+                      })()}
                       {(selectedPlaylist.tracks?.items || []).length === 0 && (
                         <div className="p-10 text-center text-zinc-400 text-sm">
                           Playlist ini masih kosong. Klik tombol <b>+ Tambah Lagu</b> untuk mencari dan memasukkan lagu!
@@ -2020,9 +2262,19 @@ export default function Player() {
                   <div className="flex-1 min-w-0">
                     <span className="text-xs font-bold uppercase tracking-wider text-[#1DB954]">Album</span>
                     <h2 className="text-2xl sm:text-4xl font-extrabold truncate mt-1">{selectedAlbum.name}</h2>
-                    <p className="text-sm text-zinc-300 mt-1">
-                      {selectedAlbum.artists?.map((a: any) => a.name).join(", ")}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1 text-sm text-zinc-300">
+                      {selectedAlbum.artists?.map((a: any, i: number) => (
+                        <span key={a.id || i}>
+                          <button
+                            onClick={() => a.id && openArtist(a.id)}
+                            className="hover:text-[#1DB954] hover:underline font-semibold cursor-pointer"
+                          >
+                            {a.name}
+                          </button>
+                          {i < selectedAlbum.artists.length - 1 ? ", " : ""}
+                        </span>
+                      ))}
+                    </div>
                     <p className="text-xs text-zinc-500 mt-1">
                       {selectedAlbum.release_date} • {selectedAlbum.total_tracks} lagu
                     </p>
@@ -2033,7 +2285,7 @@ export default function Player() {
                         selectedAlbum.uri,
                         (selectedAlbum.tracks?.items || []).map((t: any) => ({
                           ...t,
-                          album: { name: selectedAlbum.name, images: selectedAlbum.images },
+                          album: { id: selectedAlbum.id, name: selectedAlbum.name, images: selectedAlbum.images },
                         }))
                       )
                     }
@@ -2047,7 +2299,7 @@ export default function Player() {
                   {(selectedAlbum.tracks?.items || []).map((track: any, idx: number) => {
                     const enrichedTrack = {
                       ...track,
-                      album: { name: selectedAlbum.name, images: selectedAlbum.images },
+                      album: { id: selectedAlbum.id, name: selectedAlbum.name, images: selectedAlbum.images },
                     };
                     return (
                       <TrackRow
@@ -2056,12 +2308,123 @@ export default function Player() {
                         track={enrichedTrack}
                         isCurrent={data?.trackId === track.id}
                         onPlay={() => playTrack(track.uri)}
+                        onPlayNext={() => handleAddToQueue(enrichedTrack, "top")}
                         onQueue={() => handleAddToQueue(enrichedTrack)}
                         onAddToPlaylist={() => setTrackToAdd(enrichedTrack)}
+                        onArtistClick={(artistId) => openArtist(artistId)}
                       />
                     );
                   })}
                 </div>
+              </div>
+            )}
+
+            {/* TAB: ARTIST PROFILE VIEW (Spotify Artist Page) */}
+            {activeTab === "artist" && (
+              <div className="space-y-8">
+                {loadingDetail ? (
+                  <div className="py-16 text-center text-zinc-400 animate-pulse">Memuat profil artis...</div>
+                ) : selectedArtist?.artist ? (
+                  <>
+                    {/* Artist Hero Banner */}
+                    <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-emerald-950/50 via-[#18181b] to-[#121212] p-6 sm:p-8 flex flex-col sm:flex-row sm:items-end gap-6">
+                      <img
+                        src={
+                          selectedArtist.artist.images?.[0]?.url ||
+                          "https://placehold.co/240x240/27272a/white?text=Artis"
+                        }
+                        alt={selectedArtist.artist.name}
+                        className="w-32 h-32 sm:w-44 sm:h-44 rounded-full object-cover shadow-2xl border-2 border-white/10 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-[#1DB954] uppercase tracking-wider">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+                          </svg>
+                          <span>Artis Terverifikasi Spotify</span>
+                        </div>
+                        <h2 className="text-3xl sm:text-5xl font-black tracking-tight mt-1 truncate">
+                          {selectedArtist.artist.name}
+                        </h2>
+                        <p className="text-xs sm:text-sm text-zinc-300 mt-2">
+                          {(selectedArtist.artist.followers?.total || 0).toLocaleString("id-ID")} pengikut
+                          {selectedArtist.artist.genres?.length > 0 &&
+                            ` • ${selectedArtist.artist.genres.slice(0, 3).join(", ")}`}
+                        </p>
+                      </div>
+                      {selectedArtist.topTracks.length > 0 && (
+                        <button
+                          onClick={() => playContext(selectedArtist.artist.uri, selectedArtist.topTracks)}
+                          className="bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold px-7 py-3.5 rounded-full shadow-xl transition-transform hover:scale-105 cursor-pointer shrink-0"
+                        >
+                          ▶ Putar Lagu Populer
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Popular Tracks */}
+                    {selectedArtist.topTracks.length > 0 && (
+                      <section>
+                        <h3 className="text-xl font-bold mb-3">Lagu Populer</h3>
+                        <div className="bg-white/[0.03] rounded-xl border border-white/5 divide-y divide-white/5">
+                          {selectedArtist.topTracks.slice(0, 10).map((track: any, idx: number) => (
+                            <TrackRow
+                              key={track.id}
+                              index={idx + 1}
+                              track={track}
+                              isCurrent={data?.trackId === track.id}
+                              onPlay={() => playTrack(track.uri)}
+                              onPlayNext={() => handleAddToQueue(track, "top")}
+                              onQueue={() => handleAddToQueue(track)}
+                              onAddToPlaylist={() => setTrackToAdd(track)}
+                              onLike={() => handleToggleLike(track.id, "save")}
+                              onAlbumClick={(albumId) => openAlbum(albumId)}
+                            />
+                          ))}
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Discography (Albums & Singles) */}
+                    {selectedArtist.albums.length > 0 && (
+                      <section>
+                        <h3 className="text-xl font-bold mb-3">Diskografi (Album & Single)</h3>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                          {selectedArtist.albums.map((album: any) => (
+                            <div
+                              key={album.id}
+                              onClick={() => openAlbum(album.id)}
+                              className="bg-[#181818] hover:bg-[#282828] p-3.5 rounded-xl cursor-pointer transition-all group"
+                            >
+                              <div className="relative aspect-square rounded-lg overflow-hidden mb-3 shadow-lg">
+                                <img
+                                  src={album.images?.[0]?.url || ""}
+                                  alt={album.name}
+                                  className="w-full h-full object-cover"
+                                />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    playContext(album.uri);
+                                  }}
+                                  className="absolute bottom-2 right-2 w-10 h-10 rounded-full bg-[#1DB954] text-black flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg cursor-pointer"
+                                >
+                                  <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M8 5v14l11-7z" />
+                                  </svg>
+                                </button>
+                              </div>
+                              <p className="font-semibold text-sm truncate">{album.name}</p>
+                              <p className="text-xs text-zinc-400 truncate mt-0.5 capitalize">
+                                {album.release_date?.slice(0, 4)} • {album.album_type || "Album"}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                  </>
+                ) : null}
               </div>
             )}
 
@@ -2362,6 +2725,319 @@ export default function Player() {
             )}
           </div>
         </main>
+
+        {/* Right Sidebar: Spotify Desktop "Now Playing View" + "Next in Queue" + "Mini Lyrics" */}
+        {rightSidebarMode !== "closed" && (
+          <aside className="hidden xl:flex w-80 bg-[#121212] rounded-xl flex-col overflow-hidden shrink-0 border border-white/5">
+            {/* Right Sidebar Header Tabs */}
+            <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1 bg-white/5 p-1 rounded-lg">
+                <button
+                  onClick={() => setRightSidebarMode("now-playing")}
+                  className={`text-[11px] font-bold px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                    rightSidebarMode === "now-playing"
+                      ? "bg-[#1DB954] text-black"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Now Playing
+                </button>
+                <button
+                  onClick={() => setRightSidebarMode("queue")}
+                  className={`text-[11px] font-bold px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                    rightSidebarMode === "queue"
+                      ? "bg-[#1DB954] text-black"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Antrean ({queueData.queue.length})
+                </button>
+                <button
+                  onClick={() => setRightSidebarMode("lyrics")}
+                  className={`text-[11px] font-bold px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                    rightSidebarMode === "lyrics"
+                      ? "bg-[#1DB954] text-black"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Lirik
+                </button>
+              </div>
+              <button
+                onClick={() => setRightSidebarMode("closed")}
+                className="text-zinc-400 hover:text-white text-xs p-1 cursor-pointer"
+                title="Tutup Panel Kanan"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Right Sidebar Body */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
+              {rightSidebarMode === "now-playing" && (
+                <>
+                  {/* Large Album Art Card */}
+                  <div className="space-y-3">
+                    <div
+                      onClick={() => data?.albumId && openAlbum(data.albumId)}
+                      className="aspect-square w-full rounded-xl overflow-hidden bg-zinc-800 shadow-2xl cursor-pointer group relative"
+                    >
+                      {data?.albumImageUrl ? (
+                        <img
+                          src={data.albumImageUrl}
+                          alt={data.title}
+                          className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-4xl text-zinc-600">
+                          ♪
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-start justify-between gap-2 pt-1">
+                      <div className="min-w-0 flex-1">
+                        <h3
+                          onClick={() => data?.albumId && openAlbum(data.albumId)}
+                          className="text-lg font-extrabold text-white truncate hover:underline cursor-pointer"
+                        >
+                          {data?.title || "Tidak Ada Lagu Aktif"}
+                        </h3>
+                        <p
+                          onClick={() => data?.artistId && openArtist(data.artistId)}
+                          className="text-sm text-zinc-400 hover:text-white hover:underline truncate cursor-pointer"
+                        >
+                          {data?.artist || "Pilih lagu untuk mulai mendengarkan"}
+                        </p>
+                      </div>
+                      {data?.trackId && (
+                        <button
+                          onClick={() => handleToggleLike(data.trackId!, "save")}
+                          className="text-zinc-400 hover:text-[#1DB954] p-1.5 text-lg cursor-pointer"
+                          title="Simpan ke Lagu yang Disukai"
+                        >
+                          ♥
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Quick Lyrics Snippet Card (Like Spotify Desktop Now Playing Sidebar) */}
+                  {lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 && (
+                    <div
+                      onClick={() => setActiveTab("lyrics")}
+                      className="bg-gradient-to-br from-emerald-900/50 to-zinc-900 border border-white/10 rounded-xl p-4 cursor-pointer hover:border-[#1DB954]/40 transition-all"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-[#1DB954]">
+                          Lirik Saat Ini
+                        </span>
+                        <span className="text-[10px] text-zinc-400">Buka Penuh ↗</span>
+                      </div>
+                      <p className="text-sm font-bold text-white line-clamp-2">
+                        {activeLyricIndex >= 0
+                          ? lyrics.syncedLyrics[activeLyricIndex]?.text || "♪ • • •"
+                          : lyrics.syncedLyrics[0]?.text}
+                      </p>
+                      {activeLyricIndex + 1 < lyrics.syncedLyrics.length && (
+                        <p className="text-xs text-zinc-400 mt-1 line-clamp-1">
+                          {lyrics.syncedLyrics[activeLyricIndex + 1]?.text}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Next in Queue Card inside Now Playing Sidebar */}
+                  <div className="bg-white/[0.04] border border-white/5 rounded-xl p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white">Berikutnya di Antrean</span>
+                      <button
+                        onClick={() => setActiveTab("queue")}
+                        className="text-[11px] font-bold text-zinc-400 hover:text-[#1DB954] cursor-pointer"
+                      >
+                        Buka Antrean
+                      </button>
+                    </div>
+
+                    {queueData.queue.length > 0 ? (
+                      <div className="space-y-2">
+                        {queueData.queue.slice(0, 3).map((item, idx) => (
+                          <div
+                            key={item.queueId || `${item.id}-${idx}`}
+                            className="flex items-center justify-between gap-2.5 p-1.5 rounded-lg hover:bg-white/5 group"
+                          >
+                            <div
+                              onClick={() => handlePlayFromQueue(idx)}
+                              className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
+                            >
+                              <img
+                                src={
+                                  item.album?.images?.[0]?.url ||
+                                  "https://placehold.co/60x60/27272a/white?text=♪"
+                                }
+                                alt={item.name}
+                                className="w-9 h-9 rounded object-cover shrink-0"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-white truncate group-hover:text-[#1DB954]">
+                                  {item.name}
+                                </p>
+                                <p className="text-[11px] text-zinc-400 truncate">
+                                  {item.artists?.map((a: any) => a.name).join(", ")}
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleRemoveFromQueue(item.queueId, idx)}
+                              className="text-[11px] text-zinc-500 hover:text-red-400 px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                              title="Hapus dari antrean"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-zinc-500 py-2">
+                        Belum ada lagu di antrean berikutnya.
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {rightSidebarMode === "queue" && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                      Antrean Anda ({queueData.queue.length})
+                    </span>
+                    {queueData.queue.length > 0 && (
+                      <button
+                        onClick={handleClearQueue}
+                        className="text-[11px] text-red-400 hover:underline cursor-pointer"
+                      >
+                        Kosongkan
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {queueData.queue.map((item, idx) => (
+                      <div
+                        key={item.queueId || `${item.id}-${idx}`}
+                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white/[0.03] hover:bg-white/[0.08] group"
+                      >
+                        <div
+                          onClick={() => handlePlayFromQueue(idx)}
+                          className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
+                        >
+                          <span className="text-[11px] font-mono text-zinc-500 w-4">{idx + 1}</span>
+                          <img
+                            src={
+                              item.album?.images?.[0]?.url ||
+                              "https://placehold.co/60x60/27272a/white?text=♪"
+                            }
+                            alt={item.name}
+                            className="w-8 h-8 rounded object-cover shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-white truncate">{item.name}</p>
+                            <p className="text-[10px] text-zinc-400 truncate">
+                              {item.artists?.map((a: any) => a.name).join(", ")}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => handleMoveInQueue(idx, idx - 1)}
+                            disabled={idx === 0}
+                            className="text-[10px] text-zinc-400 hover:text-white disabled:opacity-20 px-1 cursor-pointer"
+                            title="Naik"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            onClick={() => handleMoveInQueue(idx, idx + 1)}
+                            disabled={idx === queueData.queue.length - 1}
+                            className="text-[10px] text-zinc-400 hover:text-white disabled:opacity-20 px-1 cursor-pointer"
+                            title="Turun"
+                          >
+                            ↓
+                          </button>
+                          <button
+                            onClick={() => handleRemoveFromQueue(item.queueId, idx)}
+                            className="text-[10px] text-red-400 hover:text-red-300 px-1 cursor-pointer"
+                            title="Hapus"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {queueData.queue.length === 0 && (
+                      <p className="text-xs text-zinc-500 text-center py-8">
+                        Antrean masih kosong. Tambahkan lagu dari Beranda, Playlist, atau Pencarian.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {rightSidebarMode === "lyrics" && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#1DB954]">
+                      Live Lirik
+                    </span>
+                    <button
+                      onClick={() => setActiveTab("lyrics")}
+                      className="text-[11px] text-zinc-400 hover:text-white cursor-pointer"
+                    >
+                      Layar Penuh ↗
+                    </button>
+                  </div>
+                  {loadingLyrics ? (
+                    <p className="text-xs text-zinc-400 py-8 text-center animate-pulse">
+                      Mencari lirik...
+                    </p>
+                  ) : lyrics?.syncedLyrics && lyrics.syncedLyrics.length > 0 ? (
+                    <div className="space-y-2.5 py-2">
+                      {lyrics.syncedLyrics.map((line, i) => {
+                        const isActive = i === activeLyricIndex;
+                        return (
+                          <p
+                            key={`${line.timeMs}-${i}`}
+                            onClick={() => {
+                              setLocalProgress(line.timeMs);
+                              handleControl("seek", { value: line.timeMs });
+                            }}
+                            className={`text-xs cursor-pointer transition-all rounded-lg px-2 py-1 ${
+                              isActive
+                                ? "text-[#1DB954] font-extrabold text-sm bg-white/5"
+                                : "text-zinc-400 hover:text-white"
+                            }`}
+                          >
+                            {line.text || "♪ • • •"}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  ) : lyrics?.plainLyrics ? (
+                    <div className="whitespace-pre-line text-xs text-zinc-300 leading-relaxed">
+                      {lyrics.plainLyrics}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-zinc-500 py-8 text-center">
+                      Lirik belum ditemukan untuk lagu ini.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* Built-in Browser Embed Player (Fallback when no Spotify app is open on HP/PC) */}
@@ -2402,10 +3078,16 @@ export default function Player() {
             </div>
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-white truncate">
+            <p
+              onClick={() => (data?.albumId ? openAlbum(data.albumId) : setActiveTab("focus"))}
+              className="text-sm font-bold text-white truncate hover:underline cursor-pointer"
+            >
               {data?.title || "Belum ada lagu diputar"}
             </p>
-            <p className="text-xs text-zinc-400 truncate">
+            <p
+              onClick={() => data?.artistId && openArtist(data.artistId)}
+              className="text-xs text-zinc-400 hover:text-white hover:underline truncate cursor-pointer"
+            >
               {data?.artist || "Pilih lagu untuk mulai memutar"}
             </p>
           </div>
@@ -2451,7 +3133,7 @@ export default function Player() {
             <button
               onClick={() => handleControl(data?.isPlaying ? "pause" : "play")}
               className="w-10 h-10 bg-white hover:scale-105 text-black rounded-full flex items-center justify-center shadow-md transition-transform cursor-pointer"
-              title={data?.isPlaying ? "Pause" : "Play"}
+              title={data?.isPlaying ? "Pause (Spasi)" : "Play (Spasi)"}
             >
               {data?.isPlaying ? (
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -2527,8 +3209,25 @@ export default function Player() {
           </div>
         </div>
 
-        {/* Right: Lyrics, Queue, Device Selector & Volume */}
-        <div className="flex items-center justify-end gap-2 sm:gap-3 w-1/4 relative">
+        {/* Right: Now Playing Panel, Lyrics, Queue, Device Selector & Volume */}
+        <div className="flex items-center justify-end gap-1.5 sm:gap-2.5 w-1/4 relative">
+          {/* Toggle Right Now Playing Sidebar (Spotify Desktop Icon) */}
+          <button
+            onClick={() =>
+              setRightSidebarMode((prev) => (prev === "closed" ? "now-playing" : "closed"))
+            }
+            className={`hidden xl:inline-flex p-2 rounded-lg transition-colors cursor-pointer ${
+              rightSidebarMode !== "closed"
+                ? "text-[#1DB954] bg-white/10"
+                : "text-zinc-400 hover:text-white"
+            }`}
+            title="Tampilan Sedang Diputar (Panel Kanan Spotify)"
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-6 16H5V5h8v14zm6 0h-4V5h4v14z" />
+            </svg>
+          </button>
+
           {/* Lyrics Button (Spotify Mic Icon) */}
           <button
             onClick={() => setActiveTab(activeTab === "lyrics" ? "home" : "lyrics")}
@@ -2548,7 +3247,7 @@ export default function Player() {
           {/* Queue Button */}
           <button
             onClick={() => setActiveTab(activeTab === "queue" ? "home" : "queue")}
-            className={`p-2 rounded-lg transition-colors cursor-pointer ${
+            className={`p-2 rounded-lg transition-colors cursor-pointer relative ${
               activeTab === "queue" ? "text-[#1DB954] bg-white/10" : "text-zinc-400 hover:text-white"
             }`}
             title="Lihat Antrean"
@@ -2556,6 +3255,11 @@ export default function Player() {
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z" />
             </svg>
+            {queueData.queue.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 text-[9px] bg-[#1DB954] text-black font-black rounded-full px-1">
+                {queueData.queue.length}
+              </span>
+            )}
           </button>
 
           {/* Device Picker Button */}
@@ -2634,11 +3338,23 @@ export default function Player() {
             )}
           </div>
 
-          {/* Volume Slider */}
+          {/* Volume Slider + Mute Toggle */}
           <div className="hidden sm:flex items-center gap-2 w-28">
-            <svg className="w-4 h-4 text-zinc-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
-            </svg>
+            <button
+              onClick={handleToggleMute}
+              className="text-zinc-400 hover:text-white shrink-0 cursor-pointer"
+              title={volume === 0 ? "Bunyikan (Unmute)" : "Bisukan (Mute)"}
+            >
+              {volume === 0 ? (
+                <svg className="w-4 h-4 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
+                </svg>
+              )}
+            </button>
             <input
               type="range"
               min={0}
@@ -2777,9 +3493,12 @@ function TrackRow({
   track,
   isCurrent,
   onPlay,
+  onPlayNext,
   onQueue,
   onAddToPlaylist,
   onLike,
+  onArtistClick,
+  onAlbumClick,
   onMoveUp,
   onMoveDown,
   onRemove,
@@ -2789,9 +3508,12 @@ function TrackRow({
   track: any;
   isCurrent: boolean;
   onPlay: () => void;
+  onPlayNext?: () => void;
   onQueue: () => void;
   onAddToPlaylist: () => void;
   onLike?: () => void;
+  onArtistClick?: (artistId: string) => void;
+  onAlbumClick?: (albumId: string) => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   onRemove?: () => void;
@@ -2822,14 +3544,45 @@ function TrackRow({
           />
         )}
 
-        <div className="min-w-0 flex-1 cursor-pointer" onClick={onPlay}>
-          <p className={`text-sm font-semibold truncate ${isCurrent ? "text-[#1DB954]" : "text-white"}`}>
+        <div className="min-w-0 flex-1">
+          <p
+            onClick={onPlay}
+            className={`text-sm font-semibold truncate cursor-pointer hover:underline ${
+              isCurrent ? "text-[#1DB954]" : "text-white"
+            }`}
+          >
             {track.name}
           </p>
-          <p className="text-xs text-zinc-400 truncate">
-            {track.artists?.map((a: any) => a.name).join(", ")}
-            {track.album?.name ? ` • ${track.album.name}` : ""}
-          </p>
+          <div className="text-xs text-zinc-400 truncate flex items-center gap-1">
+            <span
+              onClick={() => {
+                const firstArtistId = track.artists?.[0]?.id;
+                if (firstArtistId && onArtistClick) {
+                  onArtistClick(firstArtistId);
+                } else {
+                  onPlay();
+                }
+              }}
+              className="hover:text-white hover:underline cursor-pointer truncate"
+            >
+              {track.artists?.map((a: any) => a.name).join(", ")}
+            </span>
+            {track.album?.name && (
+              <>
+                <span>•</span>
+                <span
+                  onClick={() => {
+                    if (track.album?.id && onAlbumClick) {
+                      onAlbumClick(track.album.id);
+                    }
+                  }}
+                  className="hover:text-white hover:underline cursor-pointer truncate"
+                >
+                  {track.album.name}
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2869,6 +3622,15 @@ function TrackRow({
             title="Simpan ke Lagu yang Disukai"
           >
             ♥
+          </button>
+        )}
+        {onPlayNext && (
+          <button
+            onClick={onPlayNext}
+            className="hidden md:inline-flex text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+            title="Putar Berikutnya (Taruh di urutan #1 Antrean)"
+          >
+            ⏭ Berikutnya
           </button>
         )}
         <button
