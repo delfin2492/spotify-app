@@ -653,29 +653,6 @@ export default function Player() {
     }
   };
 
-  // Synchronize our Managed Queue directly into Spotify's live playback engine
-  // so when the current song finishes naturally, Spotify 100% plays the exact #1 song in our Queue!
-  const syncQueueToSpotifyEngine = useCallback(
-    async (updatedQueueList: any[]) => {
-      if (!data?.trackUri || !data?.isPlaying) return;
-      const queueUris = updatedQueueList.map((item) => item?.uri).filter(Boolean);
-      const combinedUris = [data.trackUri, ...queueUris].slice(0, 100);
-      try {
-        await fetch("/api/spotify/control", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "sync-playback-queue",
-            uris: combinedUris,
-            positionMs: localProgress,
-            deviceId: data?.device?.id || webPlayerDeviceId || undefined,
-          }),
-        });
-      } catch {}
-    },
-    [data?.trackUri, data?.isPlaying, data?.device?.id, webPlayerDeviceId, localProgress]
-  );
-
   // CRUD Antrean (Managed Queue)
   const handleAddToQueue = async (trackOrUri: any, position: "bottom" | "top" = "bottom") => {
     try {
@@ -734,11 +711,9 @@ export default function Player() {
         }),
       }).catch(() => {});
 
-      // Sinkronkan juga ke pemutar Spotify aktif
+      // Kirim ke pemutar Spotify cloud secara halus tanpa mengganggu buffer audio lagu yang sedang berjalan
       if (position === "bottom" && newItem.uri) {
         handleControl("queue", { uri: newItem.uri });
-      } else if (position === "top") {
-        syncQueueToSpotifyEngine(updatedList);
       }
 
       showToast(
@@ -758,7 +733,6 @@ export default function Player() {
     );
     setQueueData((prev) => ({ ...prev, queue: optimistic }));
     saveLocalQueue(optimistic);
-    syncQueueToSpotifyEngine(optimistic);
 
     try {
       const res = await fetch("/api/spotify/queue", {
@@ -781,7 +755,6 @@ export default function Player() {
   const handleClearQueue = async () => {
     setQueueData((prev) => ({ ...prev, queue: [] }));
     saveLocalQueue([]);
-    syncQueueToSpotifyEngine([]);
 
     try {
       const res = await fetch("/api/spotify/queue", {
@@ -799,13 +772,11 @@ export default function Player() {
 
   const handleMoveInQueue = async (fromIndex: number, toIndex: number) => {
     if (toIndex < 0 || toIndex >= queueData.queue.length) return;
-    // Optimistically update UI, localStorage, and Spotify playback engine immediately
     const optimistic = [...queueData.queue];
     const [moved] = optimistic.splice(fromIndex, 1);
     optimistic.splice(toIndex, 0, moved);
     setQueueData((prev) => ({ ...prev, queue: optimistic }));
     saveLocalQueue(optimistic);
-    syncQueueToSpotifyEngine(optimistic);
 
     try {
       const res = await fetch("/api/spotify/queue", {
@@ -836,7 +807,6 @@ export default function Player() {
         const updated = json.queue || [];
         setQueueData((prev) => ({ ...prev, queue: updated }));
         saveLocalQueue(updated);
-        syncQueueToSpotifyEngine(updated);
         showToast("Lagu duplikat di antrean berhasil dibersihkan!", "success");
       }
     } catch {
@@ -870,6 +840,10 @@ export default function Player() {
   // Even when clicking a song inside a Playlist or Album, we play its URI (backed by our customQueue)
   // so that the user's queue is preserved and never replaced by the whole playlist/album unless "Putar Playlist" is clicked.
   const playTrack = (trackUri: string, _contextUri?: string) => {
+    // Jika lagu yang diklik sudah sedang aktif diputar, tidak perlu mengirim perintah play ulang agar audio tidak terpotong / patah-patah
+    if (data?.trackUri === trackUri && data?.isPlaying) {
+      return;
+    }
     handleControl("play", {
       uris: [trackUri],
       queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),

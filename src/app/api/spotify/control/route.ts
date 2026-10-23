@@ -41,6 +41,11 @@ export async function POST(req: Request) {
   const body = await req.json();
   const { action, value, uris, context_uri, offset, deviceId, uri } = body;
 
+  // Jangan restart atau re-buffer pemutaran lagu yang sedang berjalan
+  if (action === 'sync-playback-queue') {
+    return NextResponse.json({ success: true });
+  }
+
   const { queue: activeCustomQueue } = loadPersistedQueue();
   const clientQueueUris: string[] = Array.isArray(body.queueUris)
     ? body.queueUris
@@ -114,18 +119,7 @@ export async function POST(req: Request) {
         if (deviceQuery) url = appendQuery(url, deviceQuery);
         method = 'PUT';
         break;
-      case 'sync-playback-queue':
-        // Seamless live update of Spotify's active playback queue without interrupting current track position!
-        url += 'play';
-        if (deviceQuery) url = appendQuery(url, deviceQuery);
-        method = 'PUT';
-        payload = {
-          uris: (uris || clientQueueUris || []).slice(0, 100),
-        };
-        if (typeof body.positionMs === 'number' && body.positionMs >= 0) {
-          payload.position_ms = body.positionMs;
-        }
-        break;
+
       case 'shuffle':
         url += `shuffle?state=${Boolean(value)}`;
         if (deviceQuery) url = appendQuery(url, deviceQuery);
