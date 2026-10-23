@@ -914,6 +914,7 @@ export default function Player() {
 
     handleControl("play", {
       uris: [trackUri],
+      deviceId: (data?.device?.id || webPlayerDeviceId) ?? undefined,
       queueUris: remainingQueue.map((item) => item?.uri).filter(Boolean),
     });
   };
@@ -950,6 +951,7 @@ export default function Player() {
 
   // Open Playlist Detail
   const openPlaylist = async (playlistId: string) => {
+    if (!playlistId) return;
     setLoadingDetail(true);
     setActiveTab("playlist");
     try {
@@ -957,6 +959,9 @@ export default function Player() {
       if (res.ok) {
         const json = await res.json();
         setSelectedPlaylist(json);
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        showToast(errJson.error || "Gagal memuat detail playlist", "error");
       }
     } catch (e) {
       showToast("Gagal memuat detail playlist", "error");
@@ -975,6 +980,9 @@ export default function Player() {
       if (res.ok) {
         const json = await res.json();
         setSelectedAlbum(json);
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        showToast(errJson.error || "Gagal memuat detail album", "error");
       }
     } catch (e) {
       showToast("Gagal memuat detail album", "error");
@@ -2344,7 +2352,23 @@ export default function Player() {
                       )}
                     </div>
                   </>
-                ) : null}
+                ) : (
+                  <div className="py-20 text-center text-zinc-400 flex flex-col items-center justify-center">
+                    <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4 text-2xl">
+                      🎵
+                    </div>
+                    <p className="text-base font-semibold text-white mb-1">Playlist Belum Dipilih / Tidak Tersedia</p>
+                    <p className="text-xs text-zinc-500 max-w-sm mb-5">
+                      Pilih playlist dari menu samping atau cari lagu & playlist melalui kolom pencarian.
+                    </p>
+                    <button
+                      onClick={() => setActiveTab("home")}
+                      className="px-5 py-2.5 bg-[#1DB954] hover:bg-[#1ed760] text-black rounded-full text-xs font-bold transition-transform hover:scale-105 cursor-pointer"
+                    >
+                      Kembali ke Beranda
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2522,7 +2546,23 @@ export default function Player() {
                       </section>
                     )}
                   </>
-                ) : null}
+                ) : (
+                  <div className="py-20 text-center text-zinc-400 flex flex-col items-center justify-center">
+                    <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4 text-2xl">
+                      🎵
+                    </div>
+                    <p className="text-base font-semibold text-white mb-1">Profil Artis Belum Dipilih / Tidak Tersedia</p>
+                    <p className="text-xs text-zinc-500 max-w-sm mb-5">
+                      Pilih artis dari daftar lagu atau cari nama artis di kolom pencarian.
+                    </p>
+                    <button
+                      onClick={() => setActiveTab("home")}
+                      className="px-5 py-2.5 bg-[#1DB954] hover:bg-[#1ed760] text-black rounded-full text-xs font-bold transition-transform hover:scale-105 cursor-pointer"
+                    >
+                      Kembali ke Beranda
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

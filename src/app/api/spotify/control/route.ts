@@ -189,9 +189,12 @@ export async function POST(req: Request) {
         },
         body: JSON.stringify({
           device_ids: [fallbackDeviceId],
-          play: action === 'play' && !uris && !context_uri,
+          play: false,
         }),
       });
+
+      // Beri jeda 450ms agar device Spotify Connect siap menerima perintah pemutaran
+      await new Promise((r) => setTimeout(r, 450));
 
       // Ulangi perintah dengan fallbackDeviceId
       const retryReq = buildRequest(fallbackDeviceId);
@@ -204,6 +207,19 @@ export async function POST(req: Request) {
           },
           ...(retryReq.payload ? { body: JSON.stringify(retryReq.payload) } : {}),
         });
+
+        // Jika masih 404 atau 502, tunggu 400ms lagi lalu coba kembali
+        if (response.status === 404 || response.status === 502) {
+          await new Promise((r) => setTimeout(r, 400));
+          response = await fetch(retryReq.url, {
+            method: retryReq.method,
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              ...(retryReq.payload ? { 'Content-Type': 'application/json' } : {}),
+            },
+            ...(retryReq.payload ? { body: JSON.stringify(retryReq.payload) } : {}),
+          });
+        }
       }
     }
 

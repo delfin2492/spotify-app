@@ -79,6 +79,12 @@ export const authOptions: AuthOptions = {
     async jwt({ token, account, user }) {
       if (account && user) {
         tokenCache.accessToken = account.access_token ?? null;
+        if (account.refresh_token) {
+          tokenCache.refreshToken = account.refresh_token;
+          try {
+            fs.writeFileSync("/tmp/.spotify-token", account.refresh_token, "utf8");
+          } catch {}
+        }
         tokenCache.expiresAt = (account.expires_at ?? 0) * 1000;
         return {
           ...token,
@@ -104,6 +110,12 @@ export const authOptions: AuthOptions = {
       session.accessToken = token.accessToken;
       session.refreshToken = token.refreshToken;
       session.error = token.error;
+      if (token.refreshToken) {
+        tokenCache.refreshToken = token.refreshToken;
+        try {
+          fs.writeFileSync("/tmp/.spotify-token", token.refreshToken, "utf8");
+        } catch {}
+      }
       return session;
     },
   },

@@ -15,7 +15,13 @@ export async function GET(req: Request) {
 
   try {
     if (playlistId) {
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`, {
+      const cleanId = (playlistId || '')
+        .replace(/^spotify:playlist:/, '')
+        .replace(/^https:\/\/open\.spotify\.com\/playlist\//, '')
+        .split('?')[0]
+        .trim();
+
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}?market=ID`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         cache: 'no-store',
       });
@@ -24,19 +30,19 @@ export async function GET(req: Request) {
       }
       const data = await res.json();
 
-      // Spotify 2026 API compatibility: normalize `items` / `tracks` and `item.item` / `item.track`
+      // Spotify API normalization: `tracks.items` or fallback to `/tracks` endpoint
       let rawItems = data.tracks?.items || data.items?.items || [];
       if (rawItems.length === 0) {
-        const itemsRes = await fetch(
-          `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items?limit=50`,
+        const tracksRes = await fetch(
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}/tracks?limit=100&market=ID`,
           {
             headers: { Authorization: `Bearer ${accessToken}` },
             cache: 'no-store',
           }
         );
-        if (itemsRes.ok) {
-          const itemsData = await itemsRes.json();
-          rawItems = itemsData.items || [];
+        if (tracksRes.ok) {
+          const tracksData = await tracksRes.json();
+          rawItems = tracksData.items || [];
         }
       }
 
@@ -57,7 +63,13 @@ export async function GET(req: Request) {
     }
 
     if (albumId) {
-      const res = await fetch(`https://api.spotify.com/v1/albums/${encodeURIComponent(albumId)}`, {
+      const cleanAlbumId = (albumId || '')
+        .replace(/^spotify:album:/, '')
+        .replace(/^https:\/\/open\.spotify\.com\/album\//, '')
+        .split('?')[0]
+        .trim();
+
+      const res = await fetch(`https://api.spotify.com/v1/albums/${encodeURIComponent(cleanAlbumId)}?market=ID`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         cache: 'no-store',
       });
