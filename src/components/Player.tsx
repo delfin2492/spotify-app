@@ -177,26 +177,18 @@ export default function Player() {
     }
   }, [isSeeking]);
 
-  // Fetch User Playlists (Filtered to GeoLab only when in PIN / GeoLab mode)
+  // Fetch User Playlists (Mirroring Host's Spotify Playlists for all sessions)
   const fetchPlaylists = useCallback(async () => {
     try {
-      const query = authMode === "geolab" ? "?mode=geolab" : "";
-      const res = await fetch(`/api/spotify/playlists${query}`);
+      const res = await fetch("/api/spotify/playlists");
       if (res.ok) {
         const json = await res.json();
-        const rawList = json.items || [];
-        if (authMode === "geolab") {
-          setPlaylists(
-            rawList.filter((pl: any) => (pl.name || "").toLowerCase().includes("geolab"))
-          );
-        } else {
-          setPlaylists(rawList);
-        }
+        setPlaylists(json.items || []);
       }
     } catch (e) {
       console.error("Failed to fetch playlists", e);
     }
-  }, [authMode]);
+  }, []);
 
   // Fetch Home Data & Initialize Web Playback SDK
   const fetchHomeAndInitSdk = useCallback(async () => {
@@ -265,6 +257,15 @@ export default function Player() {
         } else {
           saveLocalQueue(authoritativeQueue);
         }
+
+        // Bersihkan duplikat dari antrean jika ada
+        const seenQueueKeys = new Set<string>();
+        authoritativeQueue = authoritativeQueue.filter((item: any) => {
+          const key = item.uri || item.id;
+          if (!key || seenQueueKeys.has(key)) return false;
+          seenQueueKeys.add(key);
+          return true;
+        });
 
         // Jika lagu yang baru saja mulai diputar di Spotify sama dengan lagu teratas di antrean,
         // keluarkan lagu tersebut secara otomatis (karena sudah berpindah ke "Sedang Diputar")
@@ -715,7 +716,23 @@ export default function Player() {
         } catch {}
       }
 
-      // Selalu tambahkan ke urutan paling bawah (bottom) sehingga tidak menimpa atau mengganti lagu yang sudah ada
+      // Cegah duplikat: periksa apakah lagu sedang diputar sekarang
+      if (data?.trackUri && (data.trackUri === newItem.uri || data.trackId === newItem.id) && data.isPlaying) {
+        showToast(`Lagu "${newItem.name}" sedang diputar saat ini.`, "info");
+        return;
+      }
+
+      // Cegah duplikat: periksa apakah lagu sudah ada di dalam antrean
+      const isAlreadyInQueue = currentList.some(
+        (t: any) => (t.uri && t.uri === newItem.uri) || (t.id && t.id === newItem.id)
+      );
+      if (isAlreadyInQueue) {
+        showToast(`Lagu "${newItem.name}" sudah ada di dalam antrean.`, "info");
+        return;
+      }
+
+      // Bedakan posisi: "top" masuk ke bagian paling atas antrean berikutnya,
+      // sedangkan default ("bottom") masuk ke antrean paling bawah
       const updatedList =
         position === "top"
           ? [newItem, ...currentList]
@@ -747,8 +764,8 @@ export default function Player() {
 
       showToast(
         position === "top"
-          ? "Ditambahkan ke urutan #1 antrean berikutnya!"
-          : "Lagu ditambahkan di antrean paling bawah!",
+          ? `"${newItem.name}" disisipkan di posisi #1 berikutnya!`
+          : `"${newItem.name}" ditambahkan ke antrean paling bawah!`,
         "success"
       );
     } catch {
@@ -1420,7 +1437,7 @@ export default function Player() {
           <div className="bg-[#121212] rounded-xl p-4 flex-1 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between mb-3 px-1">
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                {authMode === "geolab" ? "Playlist GeoLab" : `Playlist Anda (${playlists.length})`}
+                Playlist ({playlists.length})
               </span>
               {authMode === "admin" && (
                 <button
@@ -1455,23 +1472,15 @@ export default function Player() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate text-white">{pl.name}</p>
                     <p className="text-xs text-zinc-500 truncate">
-                      {pl.tracks?.total ?? 0} lagu • {pl.owner?.display_name || "GeoLab"}
+                      {pl.tracks?.total ?? 0} lagu • {pl.owner?.display_name || "Spotify"}
                     </p>
                   </div>
                 </button>
               ))}
 
-              {playlists.length === 0 && authMode === "geolab" && (
-                <div className="p-3 bg-white/[0.03] rounded-xl border border-white/5 text-center space-y-2">
-                  <p className="text-xs text-zinc-400">
-                    Playlist <b>GeoLab</b> belum ditemukan di akun Spotify.
-                  </p>
-                  <button
-                    onClick={handleInitGeoLabPlaylist}
-                    className="w-full bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-bold py-2 px-3 rounded-lg transition-colors cursor-pointer"
-                  >
-                    + Buat Playlist GeoLab
-                  </button>
+              {playlists.length === 0 && (
+                <div className="p-3 bg-white/[0.03] rounded-xl border border-white/5 text-center">
+                  <p className="text-xs text-zinc-400">Belum ada playlist.</p>
                 </div>
               )}
             </div>
@@ -1700,9 +1709,16 @@ export default function Player() {
 
                         <div className="flex items-center justify-between gap-1 mt-3 pt-2 border-t border-white/5">
                           <button
-                            onClick={() => handleAddToQueue(track)}
+                            onClick={() => handleAddToQueue(track, "top")}
                             className="text-[11px] text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 px-2 py-1 rounded transition-colors cursor-pointer"
-                            title="Tambah ke Antrean"
+                            title="Putar Berikutnya (Sisipkan di posisi #1 antrean)"
+                          >
+                            ⏭ Berikutnya
+                          </button>
+                          <button
+                            onClick={() => handleAddToQueue(track, "bottom")}
+                            className="text-[11px] text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 px-2 py-1 rounded transition-colors cursor-pointer"
+                            title="Tambah ke Antrean Paling Bawah"
                           >
                             + Antrean
                           </button>
@@ -3292,7 +3308,9 @@ export default function Player() {
                   showToast("🔒 Mode PIN: Kontrol pemutaran dikendalikan oleh Host.", "info");
                   return;
                 }
-                handleControl("next");
+                handleControl("next", {
+                  queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),
+                });
               }}
               disabled={authMode === "geolab"}
               className={`transition-colors ${
@@ -3808,17 +3826,9 @@ export default function Player() {
                   <span className="text-xs font-bold text-[#1DB954]">+ Tambah</span>
                 </button>
               ))}
-              {playlists.length === 0 && authMode === "geolab" && (
-                <div className="p-4 text-center space-y-3">
-                  <p className="text-xs text-zinc-400">
-                    Playlist <b>GeoLab</b> belum dibuat di akun Spotify Anda.
-                  </p>
-                  <button
-                    onClick={handleInitGeoLabPlaylist}
-                    className="bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-bold px-4 py-2 rounded-full cursor-pointer"
-                  >
-                    + Buat Playlist GeoLab Sekarang
-                  </button>
+              {playlists.length === 0 && (
+                <div className="p-4 text-center text-zinc-400 text-xs">
+                  Belum ada playlist yang tersedia di akun Host.
                 </div>
               )}
             </div>
@@ -3968,8 +3978,8 @@ function TrackRow({
         {onPlayNext && (
           <button
             onClick={onPlayNext}
-            className="hidden md:inline-flex text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
-            title="Putar Berikutnya (Taruh di urutan #1 Antrean)"
+            className="text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+            title="Putar Berikutnya (Sisipkan di posisi #1 antrean berikutnya)"
           >
             ⏭ Berikutnya
           </button>
@@ -3977,7 +3987,7 @@ function TrackRow({
         <button
           onClick={onQueue}
           className="text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
-          title="Tambahkan ke Antrean"
+          title="Tambah ke Antrean (Masukkan di posisi paling bawah antrean)"
         >
           + Antrean
         </button>

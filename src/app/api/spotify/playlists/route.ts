@@ -79,16 +79,10 @@ export async function GET(req: Request) {
     }
 
     const data = await res.json();
-    let normalizedPlaylists = (data.items || []).map((pl: any) => ({
+    const normalizedPlaylists = (data.items || []).map((pl: any) => ({
       ...pl,
       tracks: pl.tracks || pl.items || { total: 0 },
     }));
-
-    if (mode === 'geolab') {
-      normalizedPlaylists = normalizedPlaylists.filter((pl: any) =>
-        (pl.name || '').toLowerCase().includes('geolab')
-      );
-    }
 
     return NextResponse.json({ items: normalizedPlaylists });
   } catch (error) {

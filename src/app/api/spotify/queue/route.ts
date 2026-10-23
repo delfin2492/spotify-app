@@ -70,12 +70,31 @@ export async function GET() {
       spotifyQueue = Array.isArray(data.queue) ? data.queue : [];
     }
 
+    // Strict deduplication of customQueue
+    const seenKeys = new Set<string>();
+    if (currentlyPlaying?.uri) {
+      seenKeys.add(currentlyPlaying.uri);
+    }
+    customQueue = customQueue.filter((item) => {
+      const key = item.uri || item.id;
+      if (!key || seenKeys.has(key)) return false;
+      seenKeys.add(key);
+      return true;
+    });
+
     // If customQueue is empty but Spotify has upcoming tracks from current context,
     // adopt Spotify's native queue so all users immediately share the active queue session
     if (customQueue.length === 0 && spotifyQueue.length > 0) {
+      const seen = new Set<string>();
+      if (currentlyPlaying?.uri) seen.add(currentlyPlaying.uri);
+
       customQueue = spotifyQueue
         .map((t: any) => normalizeTrackToQueueItem(t))
-        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
+        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => {
+          if (!t || !t.uri || seen.has(t.uri)) return false;
+          seen.add(t.uri);
+          return true;
+        });
       savePersistedQueue(customQueue, true);
     }
 
@@ -138,6 +157,22 @@ export async function POST(req: NextRequest) {
     } else {
       const persisted = loadPersistedQueue();
       updatedQueue = [...persisted.queue];
+    }
+
+    // Cegah duplikat lagu di dalam antrean
+    const isDuplicate = updatedQueue.some(
+      (t) => (t.uri && t.uri === item.uri) || (t.id && t.id === item.id)
+    );
+    if (isDuplicate) {
+      return NextResponse.json(
+        {
+          success: false,
+          duplicate: true,
+          error: `Lagu "${item.name}" sudah ada di dalam antrean.`,
+          queue: updatedQueue,
+        },
+        { status: 409 }
+      );
     }
 
     if (position === 'top' || position === 'next') {
