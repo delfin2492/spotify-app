@@ -30,12 +30,6 @@ export function loadPersistedQueue(): {
   queue: QueuedTrackItem[];
   initialized: boolean;
 } {
-  if (tokenCache.customQueueInitialized) {
-    return {
-      queue: tokenCache.customQueue,
-      initialized: true,
-    };
-  }
   try {
     const fileToRead = fs.existsSync(TMP_QUEUE_FILE)
       ? TMP_QUEUE_FILE
@@ -56,6 +50,7 @@ export function loadPersistedQueue(): {
       }
     }
   } catch {}
+
   return {
     queue: tokenCache.customQueue,
     initialized: tokenCache.customQueueInitialized,

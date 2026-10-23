@@ -147,6 +147,8 @@ export default function Player() {
   const fullscreenActiveLyricRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLDivElement | null>(null);
   const lastFetchedTrackKeyRef = useRef<string>("");
+  const lastQueueMutationTimeRef = useRef<number>(0);
+  const lastAddedQueueIdRef = useRef<string>("");
 
   // Toast Notification
   const [toast, setToast] = useState<{ message: string; type?: "success" | "error" | "info" } | null>(null);
@@ -225,6 +227,29 @@ export default function Player() {
         const json = await res.json();
         const serverQueue = Array.isArray(json.queue) ? json.queue : [];
         const spotifyNativeQueue = Array.isArray(json.spotify_queue) ? json.spotify_queue : [];
+
+        // Anti-Flicker Protection:
+        // Jika baru saja ada penambahan antrean dalam 4 detik terakhir dan respons server ini
+        // belum memuat item terbaru tersebut (karena in-flight race condition),
+        // pertahankan antrean lokal agar tidak berkedip / hilang-muncul!
+        const timeSinceMutation = Date.now() - lastQueueMutationTimeRef.current;
+        if (timeSinceMutation < 4000 && lastAddedQueueIdRef.current) {
+          const serverHasNewItem = serverQueue.some(
+            (t: any) =>
+              t.queueId === lastAddedQueueIdRef.current ||
+              t.uri === lastAddedQueueIdRef.current ||
+              t.id === lastAddedQueueIdRef.current
+          );
+          if (!serverHasNewItem && queueData.queue.length > 0) {
+            if (json.currently_playing) {
+              setQueueData((prev) => ({
+                ...prev,
+                currently_playing: json.currently_playing,
+              }));
+            }
+            return;
+          }
+        }
 
         // Server adalah sumber kebenaran bersama (shared realtime session across all users)
         let authoritativeQueue = serverQueue;
@@ -738,6 +763,9 @@ export default function Player() {
           ? [newItem, ...currentList]
           : [...currentList, newItem];
 
+      lastQueueMutationTimeRef.current = Date.now();
+      lastAddedQueueIdRef.current = newItem.queueId;
+
       // Update state dan localStorage langsung secara instan
       setQueueData((prev) => ({
         ...prev,
@@ -745,17 +773,29 @@ export default function Player() {
       }));
       saveLocalQueue(updatedList);
 
-      // Sinkronkan ke server dengan menyertakan antrean terbaru agar antar serverless instance tidak menghapus lagu
-      fetch("/api/spotify/queue", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          track: newItem,
-          uri: newItem.uri,
-          position,
-          currentQueue: currentList,
-        }),
-      }).catch(() => {});
+      // Sinkronkan ke server dengan menyertakan antrean terbaru
+      try {
+        const res = await fetch("/api/spotify/queue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            track: newItem,
+            uri: newItem.uri,
+            position,
+            currentQueue: currentList,
+          }),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.queue)) {
+            setQueueData((prev) => ({
+              ...prev,
+              queue: json.queue,
+            }));
+            saveLocalQueue(json.queue);
+          }
+        }
+      } catch {}
 
       // Kirim ke pemutar Spotify cloud secara halus tanpa mengganggu buffer audio lagu yang sedang berjalan
       if (position === "bottom" && newItem.uri) {
@@ -774,6 +814,8 @@ export default function Player() {
   };
 
   const handleRemoveFromQueue = async (queueId?: string, index?: number) => {
+    lastQueueMutationTimeRef.current = Date.now();
+    lastAddedQueueIdRef.current = "";
     const optimistic = queueData.queue.filter((it, idx) =>
       queueId ? it.queueId !== queueId : idx !== index
     );
@@ -799,6 +841,8 @@ export default function Player() {
   };
 
   const handleClearQueue = async () => {
+    lastQueueMutationTimeRef.current = Date.now();
+    lastAddedQueueIdRef.current = "";
     setQueueData((prev) => ({ ...prev, queue: [] }));
     saveLocalQueue([]);
 
@@ -818,6 +862,8 @@ export default function Player() {
 
   const handleMoveInQueue = async (fromIndex: number, toIndex: number) => {
     if (toIndex < 0 || toIndex >= queueData.queue.length) return;
+    lastQueueMutationTimeRef.current = Date.now();
+    lastAddedQueueIdRef.current = "";
     const optimistic = [...queueData.queue];
     const [moved] = optimistic.splice(fromIndex, 1);
     optimistic.splice(toIndex, 0, moved);
@@ -870,6 +916,8 @@ export default function Player() {
     if (!target) return;
 
     const remainingQueue = queueData.queue.filter((_, idx) => idx !== index);
+    lastQueueMutationTimeRef.current = Date.now();
+    lastAddedQueueIdRef.current = "";
     setQueueData((prev) => ({ ...prev, queue: remainingQueue }));
     saveLocalQueue(remainingQueue);
 
