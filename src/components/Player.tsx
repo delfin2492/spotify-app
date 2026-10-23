@@ -226,12 +226,36 @@ export default function Player() {
                 authoritativeQueue = parsedLocal;
               }
             } catch {}
-          } else if (serverQueue.length > 0) {
-            saveLocalQueue(serverQueue);
           }
         }
 
-        // If the song that just started playing on Spotify is the first item in our authoritativeQueue, pop it automatically!
+        // Jika antrean lokal masih kosong tetapi pemutar Spotify sedang memutar konteks dengan lagu berikutnya,
+        // otomatis masukkan ke antrean tunggal ini agar pengguna langsung melihat daftar antrean yang sesuai!
+        if (authoritativeQueue.length === 0 && spotifyNativeQueue.length > 0) {
+          authoritativeQueue = spotifyNativeQueue.map((t: any) => ({
+            queueId: `${t.id || 't'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            id: t.id || (t.uri ? t.uri.split(':')[2] : '') || '',
+            uri: t.uri,
+            name: t.name || 'Unknown Track',
+            artists: Array.isArray(t.artists)
+              ? t.artists.map((a: any) => ({ name: a.name || String(a) }))
+              : [{ name: String(t.artist || 'Spotify') }],
+            album: {
+              name: t.album?.name || '',
+              images: Array.isArray(t.album?.images) ? t.album.images : [],
+            },
+            duration_ms: t.duration_ms || 0,
+          }));
+          saveLocalQueue(authoritativeQueue);
+          fetch("/api/spotify/queue", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "replace", queue: authoritativeQueue }),
+          }).catch(() => {});
+        }
+
+        // Jika lagu yang baru saja mulai diputar di Spotify sama dengan lagu teratas di antrean,
+        // keluarkan lagu tersebut secara otomatis (karena sudah berpindah ke "Sedang Diputar")
         const currentUri = json.currently_playing?.uri;
         if (
           currentUri &&
@@ -250,7 +274,7 @@ export default function Player() {
         setQueueData({
           currently_playing: json.currently_playing || null,
           queue: authoritativeQueue,
-          spotify_queue: spotifyNativeQueue,
+          spotify_queue: [],
         });
       }
     } catch (e) {}
@@ -655,34 +679,74 @@ export default function Player() {
   // CRUD Antrean (Managed Queue)
   const handleAddToQueue = async (trackOrUri: any, position: "bottom" | "top" = "bottom") => {
     try {
-      const payload =
-        typeof trackOrUri === "string"
-          ? { uri: trackOrUri, position }
-          : { track: trackOrUri, uri: trackOrUri?.uri, position };
+      const rawTrack = typeof trackOrUri === "string" ? { uri: trackOrUri } : trackOrUri;
+      if (!rawTrack?.uri) return;
 
-      const res = await fetch("/api/spotify/queue", {
+      const newItem = {
+        queueId: rawTrack.queueId || `${rawTrack.id || 't'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: rawTrack.id || (rawTrack.uri ? rawTrack.uri.split(':')[2] : '') || '',
+        uri: rawTrack.uri,
+        name: rawTrack.name || 'Unknown Track',
+        artists: Array.isArray(rawTrack.artists)
+          ? rawTrack.artists.map((a: any) => ({ name: a.name || String(a) }))
+          : [{ name: String(rawTrack.artist || 'Spotify') }],
+        album: {
+          name: rawTrack.album?.name || '',
+          images: Array.isArray(rawTrack.album?.images) ? rawTrack.album.images : [],
+        },
+        duration_ms: rawTrack.duration_ms || 0,
+      };
+
+      // Ambil daftar antrean saat ini dari state atau localStorage
+      let currentList = Array.isArray(queueData.queue) ? [...queueData.queue] : [];
+      if (currentList.length === 0 && typeof window !== "undefined") {
+        try {
+          const saved = localStorage.getItem("vantara_custom_queue");
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) currentList = parsed;
+          }
+        } catch {}
+      }
+
+      // Selalu tambahkan ke urutan paling bawah (bottom) sehingga tidak menimpa atau mengganti lagu yang sudah ada
+      const updatedList =
+        position === "top"
+          ? [newItem, ...currentList]
+          : [...currentList, newItem];
+
+      // Update state dan localStorage langsung secara instan
+      setQueueData((prev) => ({
+        ...prev,
+        queue: updatedList,
+      }));
+      saveLocalQueue(updatedList);
+
+      // Sinkronkan ke server dengan menyertakan antrean terbaru agar antar serverless instance tidak menghapus lagu
+      fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const updated = json.queue || queueData.queue;
-        setQueueData((prev) => ({
-          ...prev,
-          queue: updated,
-        }));
-        saveLocalQueue(updated);
-        syncQueueToSpotifyEngine(updated);
-        showToast(
-          position === "top"
-            ? "Ditambahkan ke urutan #1 antrean berikutnya!"
-            : "Lagu ditambahkan ke antrean!",
-          "success"
-        );
-      } else {
-        showToast("Gagal menambahkan lagu ke antrean", "error");
+        body: JSON.stringify({
+          track: newItem,
+          uri: newItem.uri,
+          position,
+          currentQueue: currentList,
+        }),
+      }).catch(() => {});
+
+      // Sinkronkan juga ke pemutar Spotify aktif
+      if (position === "bottom" && newItem.uri) {
+        handleControl("queue", { uri: newItem.uri });
+      } else if (position === "top") {
+        syncQueueToSpotifyEngine(updatedList);
       }
+
+      showToast(
+        position === "top"
+          ? "Ditambahkan ke urutan #1 antrean berikutnya!"
+          : "Lagu ditambahkan di antrean paling bawah!",
+        "success"
+      );
     } catch {
       showToast("Gagal menambahkan ke antrean", "error");
     }
@@ -2041,6 +2105,8 @@ export default function Player() {
                         onPlay={() => handlePlayFromQueue(idx)}
                         onQueue={() => handleAddToQueue(track)}
                         onAddToPlaylist={() => setTrackToAdd(track)}
+                        onArtistClick={(artistId) => openArtist(artistId)}
+                        onAlbumClick={(albumId) => openAlbum(albumId)}
                         onMoveUp={idx > 0 ? () => handleMoveInQueue(idx, idx - 1) : undefined}
                         onMoveDown={
                           idx < queueData.queue.length - 1
@@ -2053,7 +2119,7 @@ export default function Player() {
                     ))}
                     {queueData.queue.length === 0 && (
                       <div className="p-10 text-center text-zinc-400 space-y-3">
-                        <p className="text-sm">Antrean khusus Anda saat ini kosong.</p>
+                        <p className="text-sm">Antrean saat ini kosong.</p>
                         <button
                           onClick={() => setActiveTab("search")}
                           className="bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-bold px-4 py-2 rounded-full cursor-pointer"
@@ -2065,38 +2131,7 @@ export default function Player() {
                   </div>
                 </section>
 
-                {/* Next from Spotify Autoplay / Context when Custom Queue is empty or after Custom Queue */}
-                {queueData.spotify_queue && queueData.spotify_queue.length > 0 && (
-                  <section>
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                        Berikutnya dari Spotify / Konteks Pemutar ({queueData.spotify_queue.length})
-                      </h3>
-                      <span className="text-[11px] text-zinc-500">
-                        Klik + Antrean untuk memindahkan ke Antrean Utama Anda
-                      </span>
-                    </div>
-                    <div className="bg-white/[0.02] rounded-xl border border-white/5 divide-y divide-white/5 opacity-85">
-                      {queueData.spotify_queue
-                        .filter(
-                          (st: any) =>
-                            !queueData.queue.some((qt: any) => qt.uri === st.uri)
-                        )
-                        .slice(0, 10)
-                        .map((track: any, idx: number) => (
-                          <TrackRow
-                            key={`sp-${track.id}-${idx}`}
-                            index={idx + 1}
-                            track={track}
-                            isCurrent={false}
-                            onPlay={() => playTrack(track.uri)}
-                            onQueue={() => handleAddToQueue(track)}
-                            onAddToPlaylist={() => setTrackToAdd(track)}
-                          />
-                        ))}
-                    </div>
-                  </section>
-                )}
+
               </div>
             )}
 

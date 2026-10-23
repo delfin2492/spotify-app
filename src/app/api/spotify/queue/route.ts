@@ -95,7 +95,7 @@ export async function GET() {
 
 /**
  * POST /api/spotify/queue
- * Create / Add a song (or multiple songs) to the Managed Queue (top or bottom)
+ * Create / Add a song to the Managed Queue (bottom by default, or top)
  */
 export async function POST(req: NextRequest) {
   const accessToken = await getValidAccessToken();
@@ -105,10 +105,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { track, uri, position = 'bottom' } = body;
-
-    const { queue } = loadPersistedQueue();
-    const updatedQueue = [...queue];
+    const { track, uri, position = 'bottom', currentQueue } = body;
 
     let item: QueuedTrackItem | null = null;
     if (track && track.uri) {
@@ -121,13 +118,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid track data' }, { status: 400 });
     }
 
+    // Build the updated queue using client's authoritative currentQueue if sent,
+    // otherwise fallback to persisted cache. This completely prevents serverless
+    // instance isolation from wiping out existing songs!
+    let updatedQueue: QueuedTrackItem[] = [];
+    if (Array.isArray(currentQueue)) {
+      updatedQueue = currentQueue
+        .map((t: any) => normalizeTrackToQueueItem(t))
+        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
+    } else {
+      const persisted = loadPersistedQueue();
+      updatedQueue = [...persisted.queue];
+    }
+
     if (position === 'top' || position === 'next') {
       updatedQueue.unshift(item);
     } else {
+      // Append to the very bottom of the queue (never replace top or previous tracks)
       updatedQueue.push(item);
     }
 
     savePersistedQueue(updatedQueue, true);
+
+    // Also forward to Spotify Connect player's native queue endpoint
+    if (item.uri) {
+      fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(item.uri)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }).catch(() => {});
+    }
 
     return NextResponse.json({
       success: true,
