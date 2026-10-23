@@ -70,43 +70,25 @@ export async function GET() {
       spotifyQueue = Array.isArray(data.queue) ? data.queue : [];
     }
 
-    // Strict deduplication of customQueue
-    const seenKeys = new Set<string>();
+    // Hapus lagu yang sedang aktif diputar dari antrean agar tidak muncul kembali
     if (currentlyPlaying?.uri) {
-      seenKeys.add(currentlyPlaying.uri);
+      const beforeLen = customQueue.length;
+      customQueue = customQueue.filter(
+        (item) => item.uri !== currentlyPlaying.uri && item.id !== currentlyPlaying.id
+      );
+      if (customQueue.length !== beforeLen) {
+        savePersistedQueue(customQueue, true);
+      }
     }
+
+    // Pastikan tidak ada duplikat di dalam antrean
+    const seenKeys = new Set<string>();
     customQueue = customQueue.filter((item) => {
       const key = item.uri || item.id;
       if (!key || seenKeys.has(key)) return false;
       seenKeys.add(key);
       return true;
     });
-
-    // If customQueue is empty but Spotify has upcoming tracks from current context,
-    // adopt Spotify's native queue so all users immediately share the active queue session
-    if (customQueue.length === 0 && spotifyQueue.length > 0) {
-      const seen = new Set<string>();
-      if (currentlyPlaying?.uri) seen.add(currentlyPlaying.uri);
-
-      customQueue = spotifyQueue
-        .map((t: any) => normalizeTrackToQueueItem(t))
-        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => {
-          if (!t || !t.uri || seen.has(t.uri)) return false;
-          seen.add(t.uri);
-          return true;
-        });
-      savePersistedQueue(customQueue, true);
-    }
-
-    // If the currently playing song matches the first item in customQueue (e.g. Spotify naturally advanced to the next song), pop it automatically
-    if (
-      currentlyPlaying?.uri &&
-      customQueue.length > 0 &&
-      customQueue[0].uri === currentlyPlaying.uri
-    ) {
-      customQueue = customQueue.slice(1);
-      savePersistedQueue(customQueue, true);
-    }
 
     return NextResponse.json({
       currently_playing: currentlyPlaying,

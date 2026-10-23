@@ -252,35 +252,14 @@ export default function Player() {
         }
 
         // Server adalah sumber kebenaran bersama (shared realtime session across all users)
-        let authoritativeQueue = serverQueue;
+        let authoritativeQueue = [...serverQueue];
 
-        if (authoritativeQueue.length === 0 && spotifyNativeQueue.length > 0) {
-          authoritativeQueue = spotifyNativeQueue.map((t: any) => ({
-            queueId: `${t.id || 't'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            id: t.id || (t.uri ? t.uri.split(':')[2] : '') || '',
-            uri: t.uri,
-            name: t.name || 'Unknown Track',
-            artists: Array.isArray(t.artists)
-              ? t.artists.map((a: any) => ({ name: a.name || String(a) }))
-              : [{ name: String(t.artist || 'Spotify') }],
-            album: {
-              name: t.album?.name || '',
-              images: Array.isArray(t.album?.images) ? t.album.images : [],
-            },
-            duration_ms: t.duration_ms || 0,
-          }));
-          saveLocalQueue(authoritativeQueue);
-        } else if (authoritativeQueue.length === 0 && typeof window !== "undefined") {
-          // Fallback bila server kosong
-          const savedRaw = localStorage.getItem("vantara_custom_queue");
-          if (savedRaw) {
-            try {
-              const parsed = JSON.parse(savedRaw);
-              if (Array.isArray(parsed) && parsed.length > 0) authoritativeQueue = parsed;
-            } catch {}
-          }
-        } else {
-          saveLocalQueue(authoritativeQueue);
+        // Hapus lagu yang sedang aktif diputar dari antrean agar tidak muncul kembali
+        const currentUri = json.currently_playing?.uri;
+        if (currentUri && authoritativeQueue.length > 0) {
+          authoritativeQueue = authoritativeQueue.filter(
+            (t: any) => t.uri !== currentUri && t.id !== json.currently_playing?.id
+          );
         }
 
         // Bersihkan duplikat dari antrean jika ada
@@ -292,22 +271,7 @@ export default function Player() {
           return true;
         });
 
-        // Jika lagu yang baru saja mulai diputar di Spotify sama dengan lagu teratas di antrean,
-        // keluarkan lagu tersebut secara otomatis (karena sudah berpindah ke "Sedang Diputar")
-        const currentUri = json.currently_playing?.uri;
-        if (
-          currentUri &&
-          authoritativeQueue.length > 0 &&
-          authoritativeQueue[0]?.uri === currentUri
-        ) {
-          authoritativeQueue = authoritativeQueue.slice(1);
-          saveLocalQueue(authoritativeQueue);
-          fetch("/api/spotify/queue", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "replace", queue: authoritativeQueue }),
-          }).catch(() => {});
-        }
+        saveLocalQueue(authoritativeQueue);
 
         setQueueData({
           currently_playing: json.currently_playing || null,
@@ -612,9 +576,9 @@ export default function Player() {
       queueUris?: string[];
     }
   ) => {
-    // Mode PIN (GeoLab / Tamu): tidak bisa playback, next, previous (back), dan mengatur posisi menit lagunya
-    if (authMode === "geolab" && ["play", "pause", "next", "previous", "seek"].includes(action)) {
-      showToast("🔒 Mode PIN: Kontrol playback, skip lagu, dan menit dikendalikan oleh Host.", "info");
+    // Mode PIN: hanya dilarang mengatur posisi menit lagu (seek)
+    if (authMode === "geolab" && action === "seek") {
+      showToast("🔒 Mode PIN: Mengatur posisi menit lagu dinonaktifkan.", "info");
       return;
     }
 
@@ -729,17 +693,8 @@ export default function Player() {
         duration_ms: rawTrack.duration_ms || 0,
       };
 
-      // Ambil daftar antrean saat ini dari state atau localStorage
-      let currentList = Array.isArray(queueData.queue) ? [...queueData.queue] : [];
-      if (currentList.length === 0 && typeof window !== "undefined") {
-        try {
-          const saved = localStorage.getItem("vantara_custom_queue");
-          if (saved) {
-            const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed) && parsed.length > 0) currentList = parsed;
-          }
-        } catch {}
-      }
+      // Ambil daftar antrean saat ini
+      const currentList = Array.isArray(queueData.queue) ? [...queueData.queue] : [];
 
       // Cegah duplikat: periksa apakah lagu sedang diputar sekarang
       if (data?.trackUri && (data.trackUri === newItem.uri || data.trackId === newItem.id) && data.isPlaying) {
@@ -908,10 +863,6 @@ export default function Player() {
 
   // Play a specific item from inside the Queue (removes that item from Queue and keeps all other queued tracks in exact order!)
   const handlePlayFromQueue = async (index: number) => {
-    if (authMode === "geolab") {
-      showToast("🔒 Mode PIN: Memilih lagu untuk diputar langsung dinonaktifkan.", "info");
-      return;
-    }
     const target = queueData.queue[index];
     if (!target) return;
 
@@ -942,12 +893,6 @@ export default function Player() {
     if (data?.trackUri === trackUri && data?.isPlaying) {
       return;
     }
-    // Jika login menggunakan PIN, tidak bisa playback langsung, melainkan otomatis dimasukkan ke antrean
-    if (authMode === "geolab") {
-      handleAddToQueue(trackUri);
-      showToast("🔒 Mode PIN: Lagu ditambahkan ke antrean (hanya Host yang dapat memutar langsung).", "info");
-      return;
-    }
     handleControl("play", {
       uris: [trackUri],
       queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),
@@ -956,10 +901,6 @@ export default function Player() {
 
   // Play an entire playlist or album (and populate customQueue with its tracks in exact order!)
   const playContext = async (contextUri: string, tracksList?: any[]) => {
-    if (authMode === "geolab") {
-      showToast("🔒 Mode PIN: Pemutaran langsung dinonaktifkan. Gunakan tombol '+ Antrean' untuk menambah lagu.", "info");
-      return;
-    }
     if (Array.isArray(tracksList) && tracksList.length > 0) {
       const firstTrack = tracksList[0];
       const restTracks = tracksList.slice(1);
@@ -1072,10 +1013,6 @@ export default function Player() {
       }
       if (e.code === "Space") {
         e.preventDefault();
-        if (authMode === "geolab") {
-          showToast("🔒 Mode PIN: Kontrol playback dikendalikan oleh Host.", "info");
-          return;
-        }
         handleControl(data?.isPlaying ? "pause" : "play");
       }
     };
@@ -3271,72 +3208,33 @@ export default function Player() {
           <div className="flex items-center gap-5 mb-2">
             {/* Shuffle Button */}
             <button
-              onClick={() => {
-                if (authMode === "geolab") {
-                  showToast("🔒 Mode PIN: Fitur acak dikendalikan oleh Host.", "info");
-                  return;
-                }
-                handleControl("shuffle", { value: !data?.shuffleState });
-              }}
-              disabled={authMode === "geolab"}
-              className={`transition-colors ${
-                authMode === "geolab"
-                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
-                  : data?.shuffleState
-                  ? "text-[#1DB954] cursor-pointer"
-                  : "text-zinc-400 hover:text-white cursor-pointer"
+              onClick={() => handleControl("shuffle", { value: !data?.shuffleState })}
+              className={`transition-colors cursor-pointer ${
+                data?.shuffleState ? "text-[#1DB954]" : "text-zinc-400 hover:text-white"
               }`}
-              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : "Acak (Shuffle)"}
+              title="Acak (Shuffle)"
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
               </svg>
             </button>
 
-            {/* Previous */}
+            {/* Previous (Back) */}
             <button
-              onClick={() => {
-                if (authMode === "geolab") {
-                  showToast("🔒 Mode PIN: Kontrol pemutaran dikendalikan oleh Host.", "info");
-                  return;
-                }
-                handleControl("previous");
-              }}
-              disabled={authMode === "geolab"}
-              className={`transition-colors ${
-                authMode === "geolab"
-                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
-                  : "text-zinc-300 hover:text-white cursor-pointer"
-              }`}
-              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : "Sebelumnya"}
+              onClick={() => handleControl("previous")}
+              className="text-zinc-300 hover:text-white transition-colors cursor-pointer"
+              title="Sebelumnya"
             >
               <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
               </svg>
             </button>
 
-            {/* Play / Pause */}
+            {/* Play / Pause / Stop */}
             <button
-              onClick={() => {
-                if (authMode === "geolab") {
-                  showToast("🔒 Mode PIN: Kontrol playback dikendalikan oleh Host.", "info");
-                  return;
-                }
-                handleControl(data?.isPlaying ? "pause" : "play");
-              }}
-              disabled={authMode === "geolab"}
-              className={`w-10 h-10 rounded-full flex items-center justify-center shadow-md transition-all ${
-                authMode === "geolab"
-                  ? "bg-zinc-700 text-zinc-500 opacity-50 cursor-not-allowed"
-                  : "bg-white hover:scale-105 text-black cursor-pointer"
-              }`}
-              title={
-                authMode === "geolab"
-                  ? "🔒 Dikendalikan oleh Host"
-                  : data?.isPlaying
-                  ? "Pause (Spasi)"
-                  : "Play (Spasi)"
-              }
+              onClick={() => handleControl(data?.isPlaying ? "pause" : "play")}
+              className="w-10 h-10 bg-white hover:scale-105 text-black rounded-full flex items-center justify-center shadow-md transition-transform cursor-pointer"
+              title={data?.isPlaying ? "Stop / Pause (Spasi)" : "Play (Spasi)"}
             >
               {data?.isPlaying ? (
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -3352,21 +3250,12 @@ export default function Player() {
             {/* Next */}
             <button
               onClick={() => {
-                if (authMode === "geolab") {
-                  showToast("🔒 Mode PIN: Kontrol pemutaran dikendalikan oleh Host.", "info");
-                  return;
-                }
                 handleControl("next", {
                   queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),
                 });
               }}
-              disabled={authMode === "geolab"}
-              className={`transition-colors ${
-                authMode === "geolab"
-                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
-                  : "text-zinc-300 hover:text-white cursor-pointer"
-              }`}
-              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : "Selanjutnya"}
+              className="text-zinc-300 hover:text-white transition-colors cursor-pointer"
+              title="Selanjutnya"
             >
               <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
@@ -3375,22 +3264,13 @@ export default function Player() {
 
             {/* Repeat Button */}
             <button
-              onClick={() => {
-                if (authMode === "geolab") {
-                  showToast("🔒 Mode PIN: Fitur ulangi dikendalikan oleh Host.", "info");
-                  return;
-                }
-                handleCycleRepeat();
-              }}
-              disabled={authMode === "geolab"}
-              className={`relative transition-colors ${
-                authMode === "geolab"
-                  ? "text-zinc-600 opacity-40 cursor-not-allowed"
-                  : data?.repeatState && data.repeatState !== "off"
-                  ? "text-[#1DB954] cursor-pointer"
-                  : "text-zinc-400 hover:text-white cursor-pointer"
+              onClick={handleCycleRepeat}
+              className={`relative transition-colors cursor-pointer ${
+                data?.repeatState && data.repeatState !== "off"
+                  ? "text-[#1DB954]"
+                  : "text-zinc-400 hover:text-white"
               }`}
-              title={authMode === "geolab" ? "🔒 Dikendalikan oleh Host" : `Ulangi: ${data?.repeatState || "off"}`}
+              title={`Ulangi: ${data?.repeatState || "off"}`}
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" />
@@ -3761,23 +3641,21 @@ export default function Player() {
             </div>
 
             <div className="flex items-center gap-4">
-              {authMode === "admin" && (
-                <button
-                  onClick={() => handleControl(data?.isPlaying ? "pause" : "play")}
-                  className="w-10 h-10 bg-white hover:scale-105 text-black rounded-full flex items-center justify-center shadow-lg transition-transform cursor-pointer"
-                  title={data?.isPlaying ? "Pause (Spasi)" : "Play (Spasi)"}
-                >
-                  {data?.isPlaying ? (
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                  )}
-                </button>
-              )}
+              <button
+                onClick={() => handleControl(data?.isPlaying ? "pause" : "play")}
+                className="w-10 h-10 bg-white hover:scale-105 text-black rounded-full flex items-center justify-center shadow-lg transition-transform cursor-pointer"
+                title={data?.isPlaying ? "Stop / Pause (Spasi)" : "Play (Spasi)"}
+              >
+                {data?.isPlaying ? (
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                )}
+              </button>
               <span className="text-xs text-zinc-500 hidden sm:inline">
                 Tekan <kbd className="px-1.5 py-0.5 bg-white/10 rounded text-zinc-300 font-mono">Esc</kbd> untuk keluar
               </span>
