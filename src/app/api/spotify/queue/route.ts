@@ -62,10 +62,12 @@ export async function GET() {
     });
 
     let currentlyPlaying: any = null;
+    let spotifyQueue: any[] = [];
 
     if (res.ok) {
       const data = await res.json();
       currentlyPlaying = data.currently_playing || null;
+      spotifyQueue = Array.isArray(data.queue) ? data.queue : [];
     }
 
     // If the currently playing song matches the first item in customQueue (e.g. Spotify naturally advanced to the next song), pop it automatically
@@ -81,6 +83,7 @@ export async function GET() {
     return NextResponse.json({
       currently_playing: currentlyPlaying,
       queue: customQueue,
+      spotify_queue: spotifyQueue.slice(0, 20),
     });
   } catch (error) {
     return NextResponse.json(

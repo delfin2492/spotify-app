@@ -114,6 +114,18 @@ export async function POST(req: Request) {
         if (deviceQuery) url = appendQuery(url, deviceQuery);
         method = 'PUT';
         break;
+      case 'sync-playback-queue':
+        // Seamless live update of Spotify's active playback queue without interrupting current track position!
+        url += 'play';
+        if (deviceQuery) url = appendQuery(url, deviceQuery);
+        method = 'PUT';
+        payload = {
+          uris: (uris || clientQueueUris || []).slice(0, 100),
+        };
+        if (typeof body.positionMs === 'number' && body.positionMs >= 0) {
+          payload.position_ms = body.positionMs;
+        }
+        break;
       case 'shuffle':
         url += `shuffle?state=${Boolean(value)}`;
         if (deviceQuery) url = appendQuery(url, deviceQuery);
@@ -206,7 +218,10 @@ export async function POST(req: Request) {
         savePersistedQueue(activeCustomQueue.slice(1), true);
       }
       // Whenever the user plays a song or reorders, ensure Shuffle is OFF if we are following customQueue order
-      if ((action === 'play' || action === 'next') && clientQueueUris.length > 0) {
+      if (
+        (action === 'play' || action === 'next' || action === 'sync-playback-queue') &&
+        clientQueueUris.length > 0
+      ) {
         const devParam = deviceId ? `&device_id=${encodeURIComponent(deviceId)}` : '';
         fetch(`https://api.spotify.com/v1/me/player/shuffle?state=false${devParam}`, {
           method: 'PUT',

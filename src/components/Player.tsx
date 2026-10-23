@@ -68,9 +68,14 @@ export default function Player() {
   const [recentTracks, setRecentTracks] = useState<any[]>([]);
   const [playlists, setPlaylists] = useState<any[]>([]);
   const [likedTracks, setLikedTracks] = useState<any[]>([]);
-  const [queueData, setQueueData] = useState<{ currently_playing: any; queue: any[] }>({
+  const [queueData, setQueueData] = useState<{
+    currently_playing: any;
+    queue: any[];
+    spotify_queue?: any[];
+  }>({
     currently_playing: null,
     queue: [],
+    spotify_queue: [],
   });
   const [devices, setDevices] = useState<SpotifyDevice[]>([]);
   const [showDevicesMenu, setShowDevicesMenu] = useState<boolean>(false);
@@ -180,7 +185,7 @@ export default function Player() {
     }
   }, []);
 
-  // Fetch Queue (Synchronizes with localStorage so Serverless cold-starts never lose or scramble your queue order)
+  // Fetch Queue (Uses localStorage as the authoritative source of truth in the browser to prevent multi-container/serverless desync)
   const saveLocalQueue = useCallback((queueList: any[]) => {
     if (typeof window !== "undefined") {
       try {
@@ -195,34 +200,44 @@ export default function Player() {
       if (res.ok) {
         const json = await res.json();
         const serverQueue = Array.isArray(json.queue) ? json.queue : [];
+        const spotifyNativeQueue = Array.isArray(json.spotify_queue) ? json.spotify_queue : [];
 
-        // If serverless container reset its memory (serverQueue empty) but browser has saved queue, restore it to server!
-        if (serverQueue.length === 0 && typeof window !== "undefined") {
+        let authoritativeQueue = serverQueue;
+        if (typeof window !== "undefined") {
           const savedRaw = localStorage.getItem("vantara_custom_queue");
-          if (savedRaw) {
+          if (savedRaw !== null) {
             try {
-              const savedQueue = JSON.parse(savedRaw);
-              if (Array.isArray(savedQueue) && savedQueue.length > 0) {
-                const restoreRes = await fetch("/api/spotify/queue", {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ action: "replace", queue: savedQueue }),
-                });
-                if (restoreRes.ok) {
-                  const restoredJson = await restoreRes.json();
-                  setQueueData({
-                    currently_playing: json.currently_playing,
-                    queue: restoredJson.queue || savedQueue,
-                  });
-                  return;
-                }
+              const parsedLocal = JSON.parse(savedRaw);
+              if (Array.isArray(parsedLocal)) {
+                authoritativeQueue = parsedLocal;
               }
             } catch {}
+          } else if (serverQueue.length > 0) {
+            saveLocalQueue(serverQueue);
           }
         }
 
-        setQueueData(json);
-        saveLocalQueue(serverQueue);
+        // If the song that just started playing on Spotify is the first item in our authoritativeQueue, pop it automatically!
+        const currentUri = json.currently_playing?.uri;
+        if (
+          currentUri &&
+          authoritativeQueue.length > 0 &&
+          authoritativeQueue[0]?.uri === currentUri
+        ) {
+          authoritativeQueue = authoritativeQueue.slice(1);
+          saveLocalQueue(authoritativeQueue);
+          fetch("/api/spotify/queue", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "replace", queue: authoritativeQueue }),
+          }).catch(() => {});
+        }
+
+        setQueueData({
+          currently_playing: json.currently_playing || null,
+          queue: authoritativeQueue,
+          spotify_queue: spotifyNativeQueue,
+        });
       }
     } catch (e) {}
   }, [saveLocalQueue]);
@@ -579,7 +594,13 @@ export default function Player() {
         showToast("Lagu ditambahkan ke antrean!", "success");
         fetchQueue();
       } else if (action === "next") {
-        fetchQueue();
+        if (queueData.queue.length > 0) {
+          const popped = queueData.queue.slice(1);
+          setQueueData((prev) => ({ ...prev, queue: popped }));
+          saveLocalQueue(popped);
+        } else {
+          fetchQueue();
+        }
       } else if (action === "transfer") {
         showToast("Pemutaran dipindahkan ke perangkat terpilih", "info");
         fetchDevices();
@@ -593,6 +614,29 @@ export default function Player() {
       showToast("Gagal mengirim perintah ke Spotify", "error");
     }
   };
+
+  // Synchronize our Managed Queue directly into Spotify's live playback engine
+  // so when the current song finishes naturally, Spotify 100% plays the exact #1 song in our Queue!
+  const syncQueueToSpotifyEngine = useCallback(
+    async (updatedQueueList: any[]) => {
+      if (!data?.trackUri || !data?.isPlaying) return;
+      const queueUris = updatedQueueList.map((item) => item?.uri).filter(Boolean);
+      const combinedUris = [data.trackUri, ...queueUris].slice(0, 100);
+      try {
+        await fetch("/api/spotify/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "sync-playback-queue",
+            uris: combinedUris,
+            positionMs: localProgress,
+            deviceId: data?.device?.id || webPlayerDeviceId || undefined,
+          }),
+        });
+      } catch {}
+    },
+    [data?.trackUri, data?.isPlaying, data?.device?.id, webPlayerDeviceId, localProgress]
+  );
 
   // CRUD Antrean (Managed Queue)
   const handleAddToQueue = async (trackOrUri: any, position: "bottom" | "top" = "bottom") => {
@@ -615,9 +659,10 @@ export default function Player() {
           queue: updated,
         }));
         saveLocalQueue(updated);
+        syncQueueToSpotifyEngine(updated);
         showToast(
           position === "top"
-            ? "Ditambahkan ke urutan teratas antrean!"
+            ? "Ditambahkan ke urutan #1 antrean berikutnya!"
             : "Lagu ditambahkan ke antrean!",
           "success"
         );
@@ -630,6 +675,13 @@ export default function Player() {
   };
 
   const handleRemoveFromQueue = async (queueId?: string, index?: number) => {
+    const optimistic = queueData.queue.filter((it, idx) =>
+      queueId ? it.queueId !== queueId : idx !== index
+    );
+    setQueueData((prev) => ({ ...prev, queue: optimistic }));
+    saveLocalQueue(optimistic);
+    syncQueueToSpotifyEngine(optimistic);
+
     try {
       const res = await fetch("/api/spotify/queue", {
         method: "DELETE",
@@ -638,7 +690,7 @@ export default function Player() {
       });
       if (res.ok) {
         const json = await res.json();
-        const updated = json.queue || [];
+        const updated = json.queue || optimistic;
         setQueueData((prev) => ({ ...prev, queue: updated }));
         saveLocalQueue(updated);
         showToast("Lagu dihapus dari antrean", "info");
@@ -649,6 +701,10 @@ export default function Player() {
   };
 
   const handleClearQueue = async () => {
+    setQueueData((prev) => ({ ...prev, queue: [] }));
+    saveLocalQueue([]);
+    syncQueueToSpotifyEngine([]);
+
     try {
       const res = await fetch("/api/spotify/queue", {
         method: "DELETE",
@@ -656,8 +712,6 @@ export default function Player() {
         body: JSON.stringify({ clearAll: true }),
       });
       if (res.ok) {
-        setQueueData((prev) => ({ ...prev, queue: [] }));
-        saveLocalQueue([]);
         showToast("Seluruh antrean berhasil dikosongkan", "info");
       }
     } catch {
@@ -667,12 +721,13 @@ export default function Player() {
 
   const handleMoveInQueue = async (fromIndex: number, toIndex: number) => {
     if (toIndex < 0 || toIndex >= queueData.queue.length) return;
-    // Optimistically update UI & localStorage immediately so it never flickers
+    // Optimistically update UI, localStorage, and Spotify playback engine immediately
     const optimistic = [...queueData.queue];
     const [moved] = optimistic.splice(fromIndex, 1);
     optimistic.splice(toIndex, 0, moved);
     setQueueData((prev) => ({ ...prev, queue: optimistic }));
     saveLocalQueue(optimistic);
+    syncQueueToSpotifyEngine(optimistic);
 
     try {
       const res = await fetch("/api/spotify/queue", {
@@ -703,6 +758,7 @@ export default function Player() {
         const updated = json.queue || [];
         setQueueData((prev) => ({ ...prev, queue: updated }));
         saveLocalQueue(updated);
+        syncQueueToSpotifyEngine(updated);
         showToast("Lagu duplikat di antrean berhasil dibersihkan!", "success");
       }
     } catch {
@@ -736,20 +792,38 @@ export default function Player() {
   // Even when clicking a song inside a Playlist or Album, we play its URI (backed by our customQueue)
   // so that the user's queue is preserved and never replaced by the whole playlist/album unless "Putar Playlist" is clicked.
   const playTrack = (trackUri: string, _contextUri?: string) => {
-    handleControl("play", { uris: [trackUri] });
+    handleControl("play", {
+      uris: [trackUri],
+      queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),
+    });
   };
 
-  // Play an entire playlist or album (and populate customQueue with its tracks)
-  const playContext = (contextUri: string, tracksList?: any[]) => {
+  // Play an entire playlist or album (and populate customQueue with its tracks in exact order!)
+  const playContext = async (contextUri: string, tracksList?: any[]) => {
     if (Array.isArray(tracksList) && tracksList.length > 0) {
-      fetch("/api/spotify/queue", {
+      const firstTrack = tracksList[0];
+      const restTracks = tracksList.slice(1);
+      const res = await fetch("/api/spotify/queue", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "replace",
-          queue: tracksList.slice(1),
+          queue: restTracks,
         }),
-      }).then(() => fetchQueue());
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const updated = json.queue || restTracks;
+        setQueueData((prev) => ({ ...prev, queue: updated }));
+        saveLocalQueue(updated);
+      }
+      if (firstTrack?.uri) {
+        handleControl("play", {
+          uris: [firstTrack.uri],
+          queueUris: restTracks.map((t: any) => t?.uri).filter(Boolean),
+        });
+        return;
+      }
     }
     handleControl("play", { context_uri: contextUri });
   };
@@ -1636,9 +1710,10 @@ export default function Player() {
                   {likedTracks.length > 0 && (
                     <button
                       onClick={() =>
-                        handleControl("play", {
-                          uris: likedTracks.map((i) => i.track?.uri).filter(Boolean),
-                        })
+                        playContext(
+                          "",
+                          likedTracks.map((i) => i.track).filter(Boolean)
+                        )
                       }
                       className="bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold px-6 py-3 rounded-full shadow-lg transition-transform hover:scale-105 cursor-pointer"
                     >
@@ -1804,7 +1879,7 @@ export default function Player() {
                     ))}
                     {queueData.queue.length === 0 && (
                       <div className="p-10 text-center text-zinc-400 space-y-3">
-                        <p className="text-sm">Antrean pemutaran saat ini kosong.</p>
+                        <p className="text-sm">Antrean khusus Anda saat ini kosong.</p>
                         <button
                           onClick={() => setActiveTab("search")}
                           className="bg-[#1DB954] hover:bg-[#1ed760] text-black text-xs font-bold px-4 py-2 rounded-full cursor-pointer"
@@ -1815,6 +1890,39 @@ export default function Player() {
                     )}
                   </div>
                 </section>
+
+                {/* Next from Spotify Autoplay / Context when Custom Queue is empty or after Custom Queue */}
+                {queueData.spotify_queue && queueData.spotify_queue.length > 0 && (
+                  <section>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                        Berikutnya dari Spotify / Konteks Pemutar ({queueData.spotify_queue.length})
+                      </h3>
+                      <span className="text-[11px] text-zinc-500">
+                        Klik + Antrean untuk memindahkan ke Antrean Utama Anda
+                      </span>
+                    </div>
+                    <div className="bg-white/[0.02] rounded-xl border border-white/5 divide-y divide-white/5 opacity-85">
+                      {queueData.spotify_queue
+                        .filter(
+                          (st: any) =>
+                            !queueData.queue.some((qt: any) => qt.uri === st.uri)
+                        )
+                        .slice(0, 10)
+                        .map((track: any, idx: number) => (
+                          <TrackRow
+                            key={`sp-${track.id}-${idx}`}
+                            index={idx + 1}
+                            track={track}
+                            isCurrent={false}
+                            onPlay={() => playTrack(track.uri)}
+                            onQueue={() => handleAddToQueue(track)}
+                            onAddToPlaylist={() => setTrackToAdd(track)}
+                          />
+                        ))}
+                    </div>
+                  </section>
+                )}
               </div>
             )}
 
