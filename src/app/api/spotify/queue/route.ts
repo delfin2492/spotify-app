@@ -1,17 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 import { getValidAccessToken } from '@/lib/auth';
-import {
-  QueuedTrackItem,
-  loadPersistedQueue,
-  savePersistedQueue,
-} from '@/lib/spotify-cache';
+import { getFallbackDeviceId } from '../control/route';
 
-function normalizeTrackToQueueItem(track: any): QueuedTrackItem | null {
+export interface QueuedTrackItem {
+  queueId: string;
+  id: string;
+  uri: string;
+  name: string;
+  artists: { name: string }[];
+  album: {
+    name: string;
+    images: { url: string }[];
+  };
+  duration_ms: number;
+}
+
+function normalizeTrack(track: any, index: number = 0): QueuedTrackItem | null {
   if (!track || !track.uri) return null;
+  const trackId = track.id || track.uri.split(':')[2] || '';
   return {
-    queueId: track.queueId || `${track.id || 't'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    id: track.id || track.uri.split(':')[2] || '',
+    queueId: `${trackId}-${index}-${track.uri}`,
+    id: trackId,
     uri: track.uri,
     name: track.name || 'Unknown Track',
     artists: Array.isArray(track.artists)
@@ -26,34 +36,15 @@ function normalizeTrackToQueueItem(track: any): QueuedTrackItem | null {
 }
 
 /**
- * Fetch track metadata from Spotify API if only a URI was provided
+ * GET /api/spotify/queue
+ * Ambil antrean langsung 100% dari Spotify Cloud API (Single Source of Truth)
+ * Tidak lagi bergantung pada memori lokal atau /tmp sehingga TIDAK BERKEDIP di Vercel
  */
-async function fetchTrackByUri(accessToken: string, uri: string): Promise<QueuedTrackItem | null> {
-  const parts = uri.split(':');
-  const trackId = parts.length >= 3 ? parts[2] : uri;
-  if (!trackId) return null;
-
-  try {
-    const res = await fetch(`https://api.spotify.com/v1/tracks/${encodeURIComponent(trackId)}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      cache: 'no-store',
-    });
-    if (!res.ok) return null;
-    const track = await res.json();
-    return normalizeTrackToQueueItem(track);
-  } catch {
-    return null;
-  }
-}
-
 export async function GET() {
   const accessToken = await getValidAccessToken();
   if (!accessToken) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-
-  const persisted = loadPersistedQueue();
-  let customQueue = persisted.queue;
 
   try {
     const res = await fetch('https://api.spotify.com/v1/me/player/queue', {
@@ -61,43 +52,46 @@ export async function GET() {
       cache: 'no-store',
     });
 
-    let currentlyPlaying: any = null;
-    let spotifyQueue: any[] = [];
-
-    if (res.ok) {
-      const data = await res.json();
-      currentlyPlaying = data.currently_playing || null;
-      spotifyQueue = Array.isArray(data.queue) ? data.queue : [];
+    if (res.status === 204 || !res.ok) {
+      return NextResponse.json({
+        currently_playing: null,
+        queue: [],
+        spotify_queue: [],
+      });
     }
 
-    // Hapus lagu yang sedang aktif diputar dari antrean agar tidak muncul kembali
-    if (currentlyPlaying?.uri) {
-      const beforeLen = customQueue.length;
-      customQueue = customQueue.filter(
-        (item) => item.uri !== currentlyPlaying.uri && item.id !== currentlyPlaying.id
-      );
-      if (customQueue.length !== beforeLen) {
-        savePersistedQueue(customQueue, true);
-      }
-    }
+    const data = await res.json();
+    const rawCurrentlyPlaying = data.currently_playing || null;
+    const rawQueue = Array.isArray(data.queue) ? data.queue : [];
 
-    // Pastikan tidak ada duplikat di dalam antrean
+    const currentlyPlaying = rawCurrentlyPlaying ? normalizeTrack(rawCurrentlyPlaying, 0) : null;
+
+    // Normalisasi antrean dan pastikan lagu yang sedang diputar tidak terduplikasi di antrean berikutnya
+    const currentUri = currentlyPlaying?.uri;
+    const currentId = currentlyPlaying?.id;
+
     const seenKeys = new Set<string>();
-    customQueue = customQueue.filter((item) => {
-      const key = item.uri || item.id;
-      if (!key || seenKeys.has(key)) return false;
-      seenKeys.add(key);
-      return true;
+    if (currentUri) seenKeys.add(currentUri);
+    if (currentId) seenKeys.add(currentId);
+
+    const queue: QueuedTrackItem[] = [];
+    rawQueue.forEach((item: any, idx: number) => {
+      const normalized = normalizeTrack(item, idx + 1);
+      if (normalized && !seenKeys.has(normalized.uri) && !seenKeys.has(normalized.id)) {
+        seenKeys.add(normalized.uri);
+        seenKeys.add(normalized.id);
+        queue.push(normalized);
+      }
     });
 
     return NextResponse.json({
       currently_playing: currentlyPlaying,
-      queue: customQueue,
-      spotify_queue: spotifyQueue.slice(0, 20),
+      queue,
+      spotify_queue: queue,
     });
   } catch (error) {
     return NextResponse.json(
-      { currently_playing: null, queue: customQueue || [] },
+      { currently_playing: null, queue: [], spotify_queue: [] },
       { status: 200 }
     );
   }
@@ -105,7 +99,7 @@ export async function GET() {
 
 /**
  * POST /api/spotify/queue
- * Create / Add a song to the Managed Queue (bottom by default, or top)
+ * Tambahkan lagu langsung ke antrean resmi Spotify Cloud
  */
 export async function POST(req: NextRequest) {
   const accessToken = await getValidAccessToken();
@@ -115,83 +109,129 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { track, uri, position = 'bottom', currentQueue } = body;
+    const { track, uri, position = 'bottom' } = body;
+    const targetUri = uri || track?.uri;
 
-    let item: QueuedTrackItem | null = null;
-    if (track && track.uri) {
-      item = normalizeTrackToQueueItem(track);
-    } else if (uri) {
-      item = await fetchTrackByUri(accessToken, uri);
+    if (!targetUri) {
+      return NextResponse.json({ error: 'Missing track URI' }, { status: 400 });
     }
 
-    if (!item) {
-      return NextResponse.json({ error: 'Invalid track data' }, { status: 400 });
+    // 1. Cek antrean saat ini untuk mencegah lagu duplikat
+    const queueRes = await fetch('https://api.spotify.com/v1/me/player/queue', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
+    });
+
+    let currentQueueUris: string[] = [];
+    if (queueRes.ok) {
+      const queueData = await queueRes.json();
+      const currentTrackUri = queueData.currently_playing?.uri;
+      const rawQueue = Array.isArray(queueData.queue) ? queueData.queue : [];
+      currentQueueUris = rawQueue.map((t: any) => t?.uri).filter(Boolean);
+
+      // Cek apakah lagu sedang diputar atau sudah ada di antrean
+      if (currentTrackUri === targetUri) {
+        return NextResponse.json(
+          {
+            error: 'Lagu ini sedang aktif diputar saat ini.',
+            duplicate: true,
+          },
+          { status: 409 }
+        );
+      }
+
+      if (currentQueueUris.includes(targetUri)) {
+        return NextResponse.json(
+          {
+            error: 'Lagu ini sudah ada di dalam antrean.',
+            duplicate: true,
+          },
+          { status: 409 }
+        );
+      }
     }
 
-    // Build the updated queue using client's authoritative currentQueue if sent,
-    // otherwise fallback to persisted cache. This completely prevents serverless
-    // instance isolation from wiping out existing songs!
-    let updatedQueue: QueuedTrackItem[] = [];
-    if (Array.isArray(currentQueue)) {
-      updatedQueue = currentQueue
-        .map((t: any) => normalizeTrackToQueueItem(t))
-        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
-    } else {
-      const persisted = loadPersistedQueue();
-      updatedQueue = [...persisted.queue];
-    }
-
-    // Cegah duplikat lagu di dalam antrean
-    const isDuplicate = updatedQueue.some(
-      (t) => (t.uri && t.uri === item.uri) || (t.id && t.id === item.id)
-    );
-    if (isDuplicate) {
-      return NextResponse.json(
-        {
-          success: false,
-          duplicate: true,
-          error: `Lagu "${item.name}" sudah ada di dalam antrean.`,
-          queue: updatedQueue,
+    // 2. Jika "top" (Putar Berikutnya) dan ada lagu yang sedang berjalan:
+    // Buat urutan baru di mana targetUri langsung diletakkan tepat setelah lagu yang sedang diputar
+    if (position === 'top' && currentQueueUris.length > 0) {
+      const reordered = [targetUri, ...currentQueueUris].slice(0, 100);
+      const playRes = await fetch('https://api.spotify.com/v1/me/player/play', {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
         },
-        { status: 409 }
-      );
+        body: JSON.stringify({ uris: reordered }),
+      });
+
+      if (playRes.ok || playRes.status === 204) {
+        return NextResponse.json({ success: true, position: 'top' });
+      }
     }
 
-    if (position === 'top' || position === 'next') {
-      updatedQueue.unshift(item);
-    } else {
-      // Append to the very bottom of the queue (never replace top or previous tracks)
-      updatedQueue.push(item);
-    }
-
-    savePersistedQueue(updatedQueue, true);
-
-    // Also forward to Spotify Connect player's native queue endpoint
-    if (item.uri) {
-      fetch(`https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(item.uri)}`, {
+    // 3. Posisi default ("bottom" / Tambah ke Antrean):
+    // Kirim ke endpoint resmi Spotify Queue: POST /v1/me/player/queue?uri=...
+    let addRes = await fetch(
+      `https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(targetUri)}`,
+      {
         method: 'POST',
         headers: { Authorization: `Bearer ${accessToken}` },
-      }).catch(() => {});
+      }
+    );
+
+    // Jika 404 (tidak ada perangkat aktif), aktifkan perangkat Host dan ulangi
+    if (addRes.status === 404) {
+      const fallbackDeviceId = await getFallbackDeviceId(accessToken);
+      if (fallbackDeviceId) {
+        await fetch('https://api.spotify.com/v1/me/player', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            device_ids: [fallbackDeviceId],
+            play: false,
+          }),
+        });
+
+        await new Promise((r) => setTimeout(r, 450));
+
+        addRes = await fetch(
+          `https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(targetUri)}&device_id=${encodeURIComponent(fallbackDeviceId)}`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }
+        );
+      } else {
+        return NextResponse.json(
+          {
+            error:
+              'Tidak ada perangkat Spotify yang aktif. Silakan buka aplikasi Spotify di HP/Laptop Host terlebih dahulu.',
+          },
+          { status: 404 }
+        );
+      }
     }
 
-    return NextResponse.json({
-      success: true,
-      item,
-      queue: updatedQueue,
-    });
+    if (addRes.ok || addRes.status === 204) {
+      return NextResponse.json({ success: true, position: 'bottom' });
+    }
+
+    const errText = await addRes.text();
+    return NextResponse.json(
+      { error: errText || 'Gagal menambahkan lagu ke antrean Spotify' },
+      { status: addRes.status }
+    );
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to add to queue' }, { status: 500 });
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
 /**
  * PUT /api/spotify/queue
- * Update / Reorder / Replace / Move items in the Managed Queue
- * Supported actions:
- * - { action: 'move', fromIndex: number, toIndex: number }
- * - { action: 'replace', queue: any[] }
- * - { action: 'deduplicate' }
- * - { action: 'sync-from-spotify' }
+ * Reorder atau sinkronkan antrean pemutar Spotify
  */
 export async function PUT(req: NextRequest) {
   const accessToken = await getValidAccessToken();
@@ -201,51 +241,41 @@ export async function PUT(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { action, fromIndex, toIndex, queue } = body;
+    const { action, queue, fromIndex, toIndex } = body;
 
-    const persisted = loadPersistedQueue();
-    let updatedQueue = [...persisted.queue];
-
-    if (action === 'move' && typeof fromIndex === 'number' && typeof toIndex === 'number') {
-      if (
-        fromIndex >= 0 &&
-        fromIndex < updatedQueue.length &&
-        toIndex >= 0 &&
-        toIndex < updatedQueue.length
-      ) {
-        const [moved] = updatedQueue.splice(fromIndex, 1);
-        updatedQueue.splice(toIndex, 0, moved);
+    if (action === 'replace' && Array.isArray(queue)) {
+      const uris = queue.map((t: any) => t?.uri).filter(Boolean).slice(0, 100);
+      if (uris.length > 0) {
+        await fetch('https://api.spotify.com/v1/me/player/play', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ uris }),
+        });
       }
-    } else if (action === 'replace' && Array.isArray(queue)) {
-      updatedQueue = queue
-        .map((t: any) => normalizeTrackToQueueItem(t))
-        .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
-    } else if (action === 'deduplicate') {
-      const seen = new Set<string>();
-      updatedQueue = updatedQueue.filter((item) => {
-        if (seen.has(item.uri)) return false;
-        seen.add(item.uri);
-        return true;
-      });
-    } else if (action === 'sync-from-spotify') {
-      const res = await fetch('https://api.spotify.com/v1/me/player/queue', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        const data = await res.json();
-        updatedQueue = (data.queue || [])
-          .map((t: any) => normalizeTrackToQueueItem(t))
-          .filter((t: QueuedTrackItem | null): t is QueuedTrackItem => t !== null);
-      }
+      return NextResponse.json({ success: true });
     }
 
-    savePersistedQueue(updatedQueue, true);
+    if (action === 'move' && typeof fromIndex === 'number' && typeof toIndex === 'number' && Array.isArray(queue)) {
+      const uris = queue.map((t: any) => t?.uri).filter(Boolean);
+      if (fromIndex >= 0 && fromIndex < uris.length && toIndex >= 0 && toIndex < uris.length) {
+        const [moved] = uris.splice(fromIndex, 1);
+        uris.splice(toIndex, 0, moved);
+        await fetch('https://api.spotify.com/v1/me/player/play', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ uris: uris.slice(0, 100) }),
+        });
+      }
+      return NextResponse.json({ success: true });
+    }
 
-    return NextResponse.json({
-      success: true,
-      queue: updatedQueue,
-    });
+    return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to update queue' }, { status: 500 });
   }
@@ -253,30 +283,34 @@ export async function PUT(req: NextRequest) {
 
 /**
  * DELETE /api/spotify/queue
- * Delete a specific item (by queueId or index) or clear the entire queue
+ * Hapus lagu dari antrean pemutar Spotify
  */
 export async function DELETE(req: NextRequest) {
+  const accessToken = await getValidAccessToken();
+  if (!accessToken) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await req.json().catch(() => ({}));
-    const { queueId, index, clearAll } = body;
+    const { index, remainingQueue } = body;
 
-    const persisted = loadPersistedQueue();
-    let updatedQueue = [...persisted.queue];
-
-    if (clearAll) {
-      updatedQueue = [];
-    } else if (queueId) {
-      updatedQueue = updatedQueue.filter((it) => it.queueId !== queueId);
-    } else if (typeof index === 'number' && index >= 0 && index < updatedQueue.length) {
-      updatedQueue.splice(index, 1);
+    // Jika diberikan sisa antrean, update pemutar Spotify langsung dengan sisa lagu tersebut
+    if (Array.isArray(remainingQueue)) {
+      const uris = remainingQueue.map((t: any) => t?.uri).filter(Boolean).slice(0, 100);
+      if (uris.length > 0) {
+        await fetch('https://api.spotify.com/v1/me/player/play', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ uris }),
+        });
+      }
     }
 
-    savePersistedQueue(updatedQueue, true);
-
-    return NextResponse.json({
-      success: true,
-      queue: updatedQueue,
-    });
+    return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to delete from queue' }, { status: 500 });
   }

@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getValidAccessToken } from '@/lib/auth';
-import { loadPersistedQueue, savePersistedQueue } from '@/lib/spotify-cache';
 
-async function getFallbackDeviceId(accessToken: string): Promise<string | null> {
+export async function getFallbackDeviceId(accessToken: string): Promise<string | null> {
   try {
     const res = await fetch('https://api.spotify.com/v1/me/player/devices', {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -46,10 +45,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
   }
 
-  const { queue: activeCustomQueue } = loadPersistedQueue();
-  const clientQueueUris: string[] = Array.isArray(body.queueUris)
-    ? body.queueUris
-    : activeCustomQueue.map((item) => item.uri).filter(Boolean);
+  const clientQueueUris: string[] = Array.isArray(body.queueUris) ? body.queueUris : [];
 
   const buildRequest = (targetDeviceId?: string | null) => {
     const deviceQuery = targetDeviceId ? `device_id=${encodeURIComponent(targetDeviceId)}` : '';
@@ -68,8 +64,6 @@ export async function POST(req: Request) {
         if (uris || context_uri || offset) {
           payload = {};
           if (uris) {
-            // If playing a single track (or custom list) while customQueue has songs,
-            // append customQueue URIs after the requested URIs so Spotify's playback queue is NOT wiped out!
             if (!body.ignoreCustomQueue && clientQueueUris.length > 0) {
               const combined = [...uris, ...clientQueueUris].slice(0, 100);
               payload.uris = combined;
@@ -87,22 +81,9 @@ export async function POST(req: Request) {
         method = 'PUT';
         break;
       case 'next':
-        // If our managed customQueue has tracks, play the top track from customQueue,
-        // while keeping the remaining customQueue tracks behind it!
-        if (clientQueueUris.length > 0) {
-          const nextUri = clientQueueUris[0];
-          const remainingUris = clientQueueUris.slice(1);
-          url += 'play';
-          if (deviceQuery) url = appendQuery(url, deviceQuery);
-          method = 'PUT';
-          payload = {
-            uris: [nextUri, ...remainingUris].slice(0, 100),
-          };
-        } else {
-          url += 'next';
-          if (deviceQuery) url = appendQuery(url, deviceQuery);
-          method = 'POST';
-        }
+        url += 'next';
+        if (deviceQuery) url = appendQuery(url, deviceQuery);
+        method = 'POST';
         break;
       case 'previous':
         url += 'previous';
@@ -224,9 +205,6 @@ export async function POST(req: Request) {
     }
 
     if (response.status === 204 || response.status === 200) {
-      if (action === 'next' && activeCustomQueue.length > 0) {
-        savePersistedQueue(activeCustomQueue.slice(1), true);
-      }
       // Whenever the user plays a song or reorders, ensure Shuffle is OFF if we are following customQueue order
       if (
         (action === 'play' || action === 'next' || action === 'sync-playback-queue') &&
