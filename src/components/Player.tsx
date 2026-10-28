@@ -130,6 +130,11 @@ export default function Player() {
   const [newPlaylistDesc, setNewPlaylistDesc] = useState<string>("");
   const [trackToAdd, setTrackToAdd] = useState<any | null>(null);
 
+  // Queue Drag and Drop State
+  const [draggedQueueIndex, setDraggedQueueIndex] = useState<number | null>(null);
+  const [dropTargetQueueIndex, setDropTargetQueueIndex] = useState<number | null>(null);
+  const isDraggingQueueRef = useRef<boolean>(false);
+
   // Web Playback SDK State
   const [webPlayerDeviceId, setWebPlayerDeviceId] = useState<string | null>(null);
   const [webPlayerReady, setWebPlayerReady] = useState<boolean>(false);
@@ -741,7 +746,15 @@ export default function Player() {
   };
 
   const handleMoveInQueue = async (fromIndex: number, toIndex: number) => {
-    if (toIndex < 0 || toIndex >= queueData.queue.length) return;
+    if (
+      fromIndex < 0 ||
+      fromIndex >= queueData.queue.length ||
+      toIndex < 0 ||
+      toIndex >= queueData.queue.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
     const optimistic = [...queueData.queue];
     const [moved] = optimistic.splice(fromIndex, 1);
     optimistic.splice(toIndex, 0, moved);
@@ -751,13 +764,13 @@ export default function Player() {
       await fetch("/api/spotify/queue", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "move", queue: optimistic, fromIndex, toIndex }),
+        body: JSON.stringify({ action: "reorder", queue: optimistic, fromIndex, toIndex }),
       });
     } catch {}
 
     setTimeout(() => {
       fetchQueue();
-    }, 1000);
+    }, 1200);
   };
 
   const handleDeduplicateQueue = async () => {
@@ -2069,13 +2082,13 @@ export default function Player() {
                 )}
 
                 <section>
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
                       Lagu Berikutnya di Antrean ({queueData.queue.length})
                     </h3>
                     {queueData.queue.length > 0 && (
                       <span className="text-[11px] text-zinc-500">
-                        Klik ▶ untuk langsung memutar • Gunakan ↑ ↓ untuk mengubah urutan • Klik Hapus untuk mengeluarkan
+                        Tahan & geser baris lagu (drag and drop) atau klik tombol ↑ ↓ untuk mengatur urutan • Klik Hapus untuk mengeluarkan
                       </span>
                     )}
                   </div>
@@ -2086,8 +2099,51 @@ export default function Player() {
                         index={idx + 1}
                         track={track}
                         isCurrent={false}
-                        onPlay={() => handlePlayFromQueue(idx)}
-                        onQueue={() => handleAddToQueue(track)}
+                        isDraggable={true}
+                        isDragging={draggedQueueIndex === idx}
+                        isDropTarget={dropTargetQueueIndex === idx}
+                        onDragStart={(e) => {
+                          isDraggingQueueRef.current = true;
+                          setDraggedQueueIndex(idx);
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", String(idx));
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (dropTargetQueueIndex !== idx) {
+                            setDropTargetQueueIndex(idx);
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dropTargetQueueIndex === idx) {
+                            setDropTargetQueueIndex(null);
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setDropTargetQueueIndex(null);
+                          const from = draggedQueueIndex;
+                          setDraggedQueueIndex(null);
+                          setTimeout(() => {
+                            isDraggingQueueRef.current = false;
+                          }, 150);
+                          if (from !== null && from !== idx) {
+                            handleMoveInQueue(from, idx);
+                          }
+                        }}
+                        onDragEnd={() => {
+                          setDraggedQueueIndex(null);
+                          setDropTargetQueueIndex(null);
+                          setTimeout(() => {
+                            isDraggingQueueRef.current = false;
+                          }, 150);
+                        }}
+                        onPlay={() => {
+                          if (isDraggingQueueRef.current) return;
+                          handlePlayFromQueue(idx);
+                        }}
+                        onQueue={() => handleAddToQueue(track, "bottom")}
                         onAddToPlaylist={() => setTrackToAdd(track)}
                         onArtistClick={(artistId) => openArtist(artistId)}
                         onAlbumClick={(albumId) => openAlbum(albumId)}
@@ -3752,6 +3808,14 @@ function TrackRow({
   onMoveDown,
   onRemove,
   removeLabel,
+  isDraggable,
+  isDragging,
+  isDropTarget,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onDragEnd,
 }: {
   index: number;
   track: any;
@@ -3767,14 +3831,40 @@ function TrackRow({
   onMoveDown?: () => void;
   onRemove?: () => void;
   removeLabel?: string;
+  isDraggable?: boolean;
+  isDragging?: boolean;
+  isDropTarget?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDragLeave?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
 }) {
   return (
     <div
-      className={`flex items-center justify-between gap-3 px-3 sm:px-4 py-2.5 hover:bg-white/[0.06] transition-colors group ${
+      draggable={isDraggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={`flex items-center justify-between gap-3 px-3 sm:px-4 py-2.5 hover:bg-white/[0.06] transition-all group ${
         isCurrent ? "bg-[#1DB954]/10" : ""
+      } ${isDragging ? "opacity-35 scale-[0.99] border-dashed border border-[#1DB954] bg-[#1DB954]/5" : ""} ${
+        isDropTarget ? "border-t-2 border-[#1DB954] bg-[#1DB954]/10" : ""
       }`}
     >
-      <div className="flex items-center gap-3 min-w-0 flex-1">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+        {isDraggable && (
+          <div
+            className="cursor-grab active:cursor-grabbing text-zinc-500 hover:text-white p-1 select-none flex items-center justify-center shrink-0"
+            title="Tahan dan geser (drag & drop) untuk mengatur urutan lagu"
+          >
+            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" />
+            </svg>
+          </div>
+        )}
         <button
           onClick={onPlay}
           className="w-6 text-center text-xs text-zinc-400 group-hover:text-white font-mono shrink-0 cursor-pointer"
@@ -3839,7 +3929,10 @@ function TrackRow({
         {(onMoveUp || onMoveDown) && (
           <div className="flex items-center gap-1 mr-1">
             <button
-              onClick={onMoveUp}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMoveUp?.();
+              }}
               disabled={!onMoveUp}
               className={`w-6 h-6 rounded flex items-center justify-center text-xs transition-colors ${
                 onMoveUp
@@ -3851,7 +3944,10 @@ function TrackRow({
               ↑
             </button>
             <button
-              onClick={onMoveDown}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMoveDown?.();
+              }}
               disabled={!onMoveDown}
               className={`w-6 h-6 rounded flex items-center justify-center text-xs transition-colors ${
                 onMoveDown

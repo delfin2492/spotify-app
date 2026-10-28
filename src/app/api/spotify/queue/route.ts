@@ -280,11 +280,56 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    if (action === 'move' && typeof fromIndex === 'number' && typeof toIndex === 'number' && Array.isArray(queue)) {
-      const uris = queue.map((t: any) => t?.uri).filter(Boolean);
-      if (fromIndex >= 0 && fromIndex < uris.length && toIndex >= 0 && toIndex < uris.length) {
+    if ((action === 'move' || action === 'reorder') && Array.isArray(queue)) {
+      let uris = queue.map((t: any) => t?.uri).filter(Boolean);
+      if (
+        action === 'move' &&
+        typeof fromIndex === 'number' &&
+        typeof toIndex === 'number' &&
+        fromIndex >= 0 &&
+        fromIndex < uris.length &&
+        toIndex >= 0 &&
+        toIndex < uris.length
+      ) {
         const [moved] = uris.splice(fromIndex, 1);
         uris.splice(toIndex, 0, moved);
+      }
+
+      // Dapatkan lagu yang sedang aktif diputar agar audio TIDAK terpotong saat reorder
+      try {
+        const playerRes = await fetch('https://api.spotify.com/v1/me/player', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          cache: 'no-store',
+        });
+
+        if (playerRes.ok && playerRes.status !== 204) {
+          const playerData = await playerRes.json();
+          const playingUri = playerData.item?.uri;
+          const progressMs = playerData.progress_ms || 0;
+          const isPlaying = Boolean(playerData.is_playing);
+
+          if (playingUri) {
+            const queueWithoutCurrent = uris.filter((u: string) => u !== playingUri);
+            const fullSequence = [playingUri, ...queueWithoutCurrent].slice(0, 100);
+
+            await fetch('https://api.spotify.com/v1/me/player/play', {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                uris: fullSequence,
+                offset: { uri: playingUri },
+                position_ms: isPlaying ? progressMs : 0,
+              }),
+            });
+            return NextResponse.json({ success: true });
+          }
+        }
+      } catch {}
+
+      if (uris.length > 0) {
         await fetch('https://api.spotify.com/v1/me/player/play', {
           method: 'PUT',
           headers: {
@@ -294,6 +339,7 @@ export async function PUT(req: NextRequest) {
           body: JSON.stringify({ uris: uris.slice(0, 100) }),
         });
       }
+
       return NextResponse.json({ success: true });
     }
 
