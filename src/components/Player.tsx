@@ -620,6 +620,36 @@ export default function Player() {
       const trackUri = rawTrack.uri;
       const trackName = rawTrack.name || "Lagu";
 
+      // Cek duplikat lokal sebelum request
+      if (data?.trackUri && data.trackUri === trackUri && data.isPlaying) {
+        showToast(`Lagu "${trackName}" sedang aktif diputar saat ini.`, "info");
+        return;
+      }
+      if (queueData.queue.some((t: any) => t.uri === trackUri)) {
+        showToast(`Lagu "${trackName}" sudah ada di dalam antrean.`, "info");
+        return;
+      }
+
+      // Optimistic Update langsung di antrean layar:
+      // "top" masuk ke posisi paling atas (index 0)
+      // "bottom" masuk ke posisi paling bawah (index terakhir)
+      const newItem: any = {
+        queueId: `${rawTrack.id || 'track'}-${Date.now()}`,
+        id: rawTrack.id || trackUri.split(':')[2] || '',
+        uri: trackUri,
+        name: rawTrack.name || 'Unknown Track',
+        artists: Array.isArray(rawTrack.artists) ? rawTrack.artists : [{ name: rawTrack.artist || 'Spotify' }],
+        album: rawTrack.album || { name: '', images: [] },
+        duration_ms: rawTrack.duration_ms || 0,
+      };
+
+      const updatedQueue =
+        position === "top"
+          ? [newItem, ...queueData.queue]
+          : [...queueData.queue, newItem];
+
+      setQueueData((prev) => ({ ...prev, queue: updatedQueue }));
+
       const res = await fetch("/api/spotify/queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -633,26 +663,28 @@ export default function Player() {
       const json = await res.json().catch(() => ({}));
 
       if (res.status === 409) {
-        showToast(json.error || `Lagu "${trackName}" sudah ada di antrean atau sedang diputar.`, "info");
+        showToast(json.error || `Lagu "${trackName}" sudah ada di antrean.`, "info");
+        fetchQueue();
         return;
       }
 
       if (!res.ok) {
         showToast(json.error || "Gagal menambahkan lagu ke antrean", "error");
+        fetchQueue();
         return;
       }
 
       showToast(
         position === "top"
-          ? `"${trackName}" disisipkan sebagai lagu berikutnya!`
-          : `"${trackName}" ditambahkan ke antrean Spotify!`,
+          ? `"${trackName}" masuk ke antrean paling atas!`
+          : `"${trackName}" masuk ke antrean paling bawah!`,
         "success"
       );
 
-      // Ambil antrean cloud terbaru dari Spotify
+      // Sinkronkan data definitif dari Spotify Cloud
       setTimeout(() => {
         fetchQueue();
-      }, 500);
+      }, 700);
     } catch {
       showToast("Gagal menambahkan ke antrean", "error");
     }
@@ -1930,7 +1962,8 @@ export default function Player() {
                         track={item.track}
                         isCurrent={data?.trackId === item.track.id}
                         onPlay={() => playTrack(item.track.uri)}
-                        onQueue={() => handleAddToQueue(item.track)}
+                        onPlayNext={() => handleAddToQueue(item.track, "top")}
+                        onQueue={() => handleAddToQueue(item.track, "bottom")}
                         onAddToPlaylist={() => setTrackToAdd(item.track)}
                         onRemove={() => handleToggleLike(item.track.id, "remove")}
                         removeLabel="Hapus Like"

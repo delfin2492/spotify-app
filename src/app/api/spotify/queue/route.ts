@@ -151,25 +151,47 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Jika "top" (Putar Berikutnya) dan ada lagu yang sedang berjalan:
-    // Buat urutan baru di mana targetUri langsung diletakkan tepat setelah lagu yang sedang diputar
-    if (position === 'top' && currentQueueUris.length > 0) {
-      const reordered = [targetUri, ...currentQueueUris].slice(0, 100);
-      const playRes = await fetch('https://api.spotify.com/v1/me/player/play', {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ uris: reordered }),
-      });
+    // 2. Jika "top" (Putar Berikutnya / Masuk ke antrean paling atas):
+    if (position === 'top') {
+      try {
+        const playerRes = await fetch('https://api.spotify.com/v1/me/player', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          cache: 'no-store',
+        });
 
-      if (playRes.ok || playRes.status === 204) {
-        return NextResponse.json({ success: true, position: 'top' });
-      }
+        if (playerRes.ok && playerRes.status !== 204) {
+          const playerData = await playerRes.json();
+          const playingUri = playerData.item?.uri;
+          const progressMs = playerData.progress_ms || 0;
+          const isPlaying = Boolean(playerData.is_playing);
+
+          if (playingUri) {
+            // Susun antrean baru: lagu aktif saat ini -> lagu target baru -> sisa antrean lama
+            const remainingUris = currentQueueUris.filter((u) => u !== targetUri);
+            const fullSequence = [playingUri, targetUri, ...remainingUris].slice(0, 100);
+
+            const playRes = await fetch('https://api.spotify.com/v1/me/player/play', {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                uris: fullSequence,
+                offset: { uri: playingUri },
+                position_ms: isPlaying ? progressMs : 0,
+              }),
+            });
+
+            if (playRes.ok || playRes.status === 204) {
+              return NextResponse.json({ success: true, position: 'top' });
+            }
+          }
+        }
+      } catch {}
     }
 
-    // 3. Posisi default ("bottom" / Tambah ke Antrean):
+    // 3. Posisi default ("bottom" / Tambah ke Antrean paling bawah):
     // Kirim ke endpoint resmi Spotify Queue: POST /v1/me/player/queue?uri=...
     let addRes = await fetch(
       `https://api.spotify.com/v1/me/player/queue?uri=${encodeURIComponent(targetUri)}`,
@@ -216,7 +238,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (addRes.ok || addRes.status === 204) {
-      return NextResponse.json({ success: true, position: 'bottom' });
+      return NextResponse.json({ success: true, position: position === 'top' ? 'top' : 'bottom' });
     }
 
     const errText = await addRes.text();
