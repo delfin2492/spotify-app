@@ -40,11 +40,19 @@ function normalizeTrack(track: any, index: number = 0): QueuedTrackItem | null {
  * Ambil antrean langsung 100% dari Spotify Cloud API (Single Source of Truth)
  * Tidak lagi bergantung pada memori lokal atau /tmp sehingga TIDAK BERKEDIP di Vercel
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   const accessToken = await getValidAccessToken();
   if (!accessToken) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const { searchParams } = new URL(req.url);
+  const playedParam = searchParams.get('played') || '';
+  const playedUrisFromQuery = playedParam
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const playedSet = new Set<string>(playedUrisFromQuery);
 
   try {
     const res = await fetch('https://api.spotify.com/v1/me/player/queue', {
@@ -66,7 +74,7 @@ export async function GET() {
 
     const currentlyPlaying = rawCurrentlyPlaying ? normalizeTrack(rawCurrentlyPlaying, 0) : null;
 
-    // Normalisasi antrean dan pastikan lagu yang sedang diputar tidak terduplikasi di antrean berikutnya
+    // Normalisasi antrean dan pastikan lagu yang sedang diputar maupun lagu yang sudah selesai diputar tidak terduplikasi/muncul di antrean
     const currentUri = currentlyPlaying?.uri;
     const currentId = currentlyPlaying?.id;
 
@@ -77,7 +85,19 @@ export async function GET() {
     const queue: QueuedTrackItem[] = [];
     rawQueue.forEach((item: any, idx: number) => {
       const normalized = normalizeTrack(item, idx + 1);
-      if (normalized && !seenKeys.has(normalized.uri) && !seenKeys.has(normalized.id)) {
+      if (!normalized) return;
+
+      // Filter out lagu yang sudah pernah diputar jika ada dalam parameter playedSet
+      const isAlreadyPlayed =
+        playedSet.has(normalized.uri) ||
+        playedSet.has(normalized.id) ||
+        playedSet.has(`spotify:track:${normalized.id}`);
+
+      if (
+        !isAlreadyPlayed &&
+        !seenKeys.has(normalized.uri) &&
+        !seenKeys.has(normalized.id)
+      ) {
         seenKeys.add(normalized.uri);
         seenKeys.add(normalized.id);
         queue.push(normalized);

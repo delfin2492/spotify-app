@@ -152,6 +152,8 @@ export default function Player() {
   const fullscreenActiveLyricRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLDivElement | null>(null);
   const lastFetchedTrackKeyRef = useRef<string>("");
+  const previousTrackUriRef = useRef<string>("");
+  const playedTrackUrisRef = useRef<Set<string>>(new Set());
 
   // Toast Notification
   const [toast, setToast] = useState<{ message: string; type?: "success" | "error" | "info" } | null>(null);
@@ -170,6 +172,18 @@ export default function Player() {
       if (res.ok) {
         const json = await res.json();
         setData(json);
+
+        // Track perpindahan lagu: jika lagu berubah dari track A ke track B, tandai track A sudah selesai diputar
+        if (json.trackUri) {
+          if (previousTrackUriRef.current && previousTrackUriRef.current !== json.trackUri) {
+            playedTrackUrisRef.current.add(previousTrackUriRef.current);
+            // Simpan juga trackId dari URI (spotify:track:xxxx)
+            const oldId = previousTrackUriRef.current.split(":")[2];
+            if (oldId) playedTrackUrisRef.current.add(oldId);
+          }
+          previousTrackUriRef.current = json.trackUri;
+        }
+
         if (!isSeeking && typeof json.progressMs === "number") {
           setLocalProgress(json.progressMs);
         }
@@ -216,14 +230,25 @@ export default function Player() {
 
   const fetchQueue = useCallback(async () => {
     try {
-      const res = await fetch("/api/spotify/queue");
+      const playedArray = Array.from(playedTrackUrisRef.current).slice(-50);
+      const queryParam = playedArray.length > 0 ? `?played=${encodeURIComponent(playedArray.join(","))}` : "";
+      const res = await fetch(`/api/spotify/queue${queryParam}`);
       if (res.ok) {
         const json = await res.json();
         const serverQueue = Array.isArray(json.queue) ? json.queue : [];
+        // Filter lokal tambahan untuk menjamin tidak ada lagu yang sudah diputar lolos ke antrean
+        const filteredQueue = serverQueue.filter((item: any) => {
+          if (!item) return false;
+          if (playedTrackUrisRef.current.has(item.uri) || playedTrackUrisRef.current.has(item.id)) {
+            return false;
+          }
+          return true;
+        });
+
         setQueueData({
           currently_playing: json.currently_playing || null,
-          queue: serverQueue,
-          spotify_queue: serverQueue,
+          queue: filteredQueue,
+          spotify_queue: filteredQueue,
         });
       }
     } catch (e) {}
@@ -598,6 +623,12 @@ export default function Player() {
         showToast("Lagu ditambahkan ke antrean!", "success");
         fetchQueue();
       } else if (action === "next") {
+        // Saat klik tombol Next, catat lagu saat ini sebagai sudah selesai diputar
+        if (data?.trackUri) {
+          playedTrackUrisRef.current.add(data.trackUri);
+          const curId = data.trackUri.split(":")[2];
+          if (curId) playedTrackUrisRef.current.add(curId);
+        }
         setTimeout(() => {
           fetchQueue();
           fetchNowPlaying();
@@ -624,6 +655,12 @@ export default function Player() {
 
       const trackUri = rawTrack.uri;
       const trackName = rawTrack.name || "Lagu";
+
+      // Hapus dari riwayat lagu yang sudah selesai diputar jika user sengaja menambahkannya kembali ke antrean
+      playedTrackUrisRef.current.delete(trackUri);
+      if (rawTrack.id) playedTrackUrisRef.current.delete(rawTrack.id);
+      const splitId = trackUri.split(":")[2];
+      if (splitId) playedTrackUrisRef.current.delete(splitId);
 
       // Cek duplikat lokal sebelum request
       if (data?.trackUri && data.trackUri === trackUri && data.isPlaying) {
@@ -806,6 +843,18 @@ export default function Player() {
     const target = queueData.queue[index];
     if (!target) return;
 
+    // Catat lagu sebelumnya dan semua lagu di atas target yang dilewati sebagai lagu yang sudah diputar
+    if (data?.trackUri) {
+      playedTrackUrisRef.current.add(data.trackUri);
+      const curId = data.trackUri.split(":")[2];
+      if (curId) playedTrackUrisRef.current.add(curId);
+    }
+    const skippedTracks = queueData.queue.slice(0, index);
+    skippedTracks.forEach((t) => {
+      if (t.uri) playedTrackUrisRef.current.add(t.uri);
+      if (t.id) playedTrackUrisRef.current.add(t.id);
+    });
+
     // Ambil lagu-lagu di bawahnya saja, buang lagu target dan semua urutan lagu di atasnya
     const remainingQueue = queueData.queue.slice(index + 1);
 
@@ -835,10 +884,22 @@ export default function Player() {
       return;
     }
 
+    // Catat lagu aktif saat ini ke riwayat lagu yang sudah selesai diputar
+    if (data?.trackUri) {
+      playedTrackUrisRef.current.add(data.trackUri);
+      const curId = data.trackUri.split(":")[2];
+      if (curId) playedTrackUrisRef.current.add(curId);
+    }
+
     // Jika lagu yang dimainkan ada di dalam antrean (misal di urutan ke-X), buang lagu tersebut dan semua urutan di atasnya
     const queueIndex = queueData.queue.findIndex((item) => item?.uri === trackUri);
     let remainingQueue = queueData.queue;
     if (queueIndex >= 0) {
+      const skipped = queueData.queue.slice(0, queueIndex);
+      skipped.forEach((t) => {
+        if (t.uri) playedTrackUrisRef.current.add(t.uri);
+        if (t.id) playedTrackUrisRef.current.add(t.id);
+      });
       remainingQueue = queueData.queue.slice(queueIndex + 1);
       setQueueData((prev) => ({ ...prev, queue: remainingQueue }));
     }
