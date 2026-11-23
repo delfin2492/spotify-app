@@ -21,6 +21,82 @@ export async function GET(req: Request) {
         .split('?')[0]
         .trim();
 
+      // Helper fallback: extract public playlist tracks from Spotify Embed when Web API Development Mode hides third-party/editorial playlist items
+      const fetchPlaylistFromEmbed = async (id: string, fallbackMeta?: any) => {
+        try {
+          const embedRes = await fetch(`https://open.spotify.com/embed/playlist/${encodeURIComponent(id)}`, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            },
+            cache: 'no-store',
+          });
+          if (!embedRes.ok) return null;
+          const html = await embedRes.text();
+          const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+          if (!match?.[1]) return null;
+
+          const nextData = JSON.parse(match[1]);
+          const entity = nextData?.props?.pageProps?.state?.data?.entity;
+          if (!entity) return null;
+
+          const coverImages = Array.isArray(entity.coverArt?.sources)
+            ? entity.coverArt.sources.map((s: any) => ({ url: s.url }))
+            : [];
+          const defaultImages =
+            Array.isArray(fallbackMeta?.images) && fallbackMeta.images.length > 0
+              ? fallbackMeta.images
+              : coverImages;
+          const playlistTitle = fallbackMeta?.name || entity.title || entity.name || 'Spotify Playlist';
+
+          const trackList = Array.isArray(entity.trackList) ? entity.trackList : [];
+          const items = trackList
+            .map((item: any, idx: number) => {
+              const uri = item?.uri || '';
+              const trackId = uri.startsWith('spotify:track:') ? uri.split(':')[2] : item?.uid || `track-${idx}`;
+              if (!item?.title && !uri) return null;
+              const artistNames = (item.subtitle || 'Spotify')
+                .replace(/\u00a0/g, ' ')
+                .split(/,\s*/)
+                .map((s: string) => s.trim())
+                .filter(Boolean);
+
+              return {
+                added_at: null,
+                track: {
+                  id: trackId,
+                  uri: uri || `spotify:track:${trackId}`,
+                  name: item.title || 'Unknown Track',
+                  artists: artistNames.length > 0 ? artistNames.map((name: string) => ({ name })) : [{ name: 'Spotify' }],
+                  album: {
+                    name: playlistTitle,
+                    images: defaultImages,
+                  },
+                  duration_ms: item.duration || 0,
+                },
+              };
+            })
+            .filter(Boolean);
+
+          return {
+            id: fallbackMeta?.id || entity.id || id,
+            name: playlistTitle,
+            description: fallbackMeta?.description || '',
+            uri: fallbackMeta?.uri || entity.uri || `spotify:playlist:${id}`,
+            images: defaultImages,
+            owner: fallbackMeta?.owner || {
+              display_name: entity.subtitle || 'Spotify',
+            },
+            tracks: {
+              total: items.length,
+              items,
+            },
+          };
+        } catch {
+          return null;
+        }
+      };
+
       let res = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}?market=ID`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         cache: 'no-store',
@@ -32,6 +108,10 @@ export async function GET(req: Request) {
         });
       }
       if (!res.ok) {
+        const embedFallback = await fetchPlaylistFromEmbed(cleanId);
+        if (embedFallback) {
+          return NextResponse.json(embedFallback);
+        }
         return NextResponse.json({ error: 'Failed to fetch playlist' }, { status: res.status });
       }
       const data = await res.json();
@@ -73,7 +153,7 @@ export async function GET(req: Request) {
         }
       }
 
-      // Fallback: explicitly fetch playlist items via Spotify 2026 `/items` endpoint, then legacy `/tracks`
+      // Fallback 1: explicitly fetch playlist items via Spotify 2026 `/items` endpoint, then legacy `/tracks`
       if (normalizedItems.length === 0) {
         const fallbackUrls = [
           `https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}/items?limit=50&market=ID`,
@@ -104,10 +184,21 @@ export async function GET(req: Request) {
         }
       }
 
+      // Fallback 2: If Spotify Web API returns 0 tracks because the playlist belongs to another user or Spotify Editorial (Development Mode restriction), extract tracks from Spotify Embed
+      if (normalizedItems.length === 0) {
+        const embedFallback = await fetchPlaylistFromEmbed(cleanId, data);
+        if (embedFallback && embedFallback.tracks.items.length > 0) {
+          normalizedItems = embedFallback.tracks.items;
+        }
+      }
+
+      const totalCount =
+        Math.max(data.tracks?.total ?? 0, data.items?.total ?? 0, normalizedItems.length);
+
       return NextResponse.json({
         ...data,
         tracks: {
-          total: data.tracks?.total ?? data.items?.total ?? normalizedItems.length,
+          total: totalCount,
           items: normalizedItems,
         },
       });
