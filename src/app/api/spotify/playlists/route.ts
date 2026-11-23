@@ -21,37 +21,88 @@ export async function GET(req: Request) {
         .split('?')[0]
         .trim();
 
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}?market=ID`, {
+      let res = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}?market=ID`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         cache: 'no-store',
       });
+      if (!res.ok) {
+        res = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          cache: 'no-store',
+        });
+      }
       if (!res.ok) {
         return NextResponse.json({ error: 'Failed to fetch playlist' }, { status: res.status });
       }
       const data = await res.json();
 
-      // Spotify API normalization: `tracks.items` or fallback to `/tracks` endpoint
-      let rawItems = data.tracks?.items || data.items?.items || [];
-      if (rawItems.length === 0) {
-        const tracksRes = await fetch(
-          `https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}/tracks?limit=100&market=ID`,
-          {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            cache: 'no-store',
+      const extractNormalizedItems = (list: any[]) => {
+        if (!Array.isArray(list)) return [];
+        return list
+          .map((entry: any) => {
+            if (!entry) return null;
+            const trackObj =
+              entry.track ||
+              entry.item ||
+              (entry.id && entry.name && (entry.uri || entry.artists) ? entry : null);
+            if (!trackObj || (!trackObj.id && !trackObj.uri && !trackObj.name)) return null;
+            return {
+              ...entry,
+              track: trackObj,
+            };
+          })
+          .filter(Boolean);
+      };
+
+      // Check all possible item containers from GET /v1/playlists/{id} (both 2026 `items` and legacy `tracks`)
+      const candidateLists = [
+        data.items?.items,
+        data.tracks?.items,
+        Array.isArray(data.items) ? data.items : null,
+        Array.isArray(data.tracks) ? data.tracks : null,
+      ];
+
+      let normalizedItems: any[] = [];
+      for (const candidate of candidateLists) {
+        if (Array.isArray(candidate) && candidate.length > 0) {
+          const extracted = extractNormalizedItems(candidate);
+          if (extracted.length > 0) {
+            normalizedItems = extracted;
+            break;
           }
-        );
-        if (tracksRes.ok) {
-          const tracksData = await tracksRes.json();
-          rawItems = tracksData.items || [];
         }
       }
 
-      const normalizedItems = rawItems
-        .map((entry: any) => ({
-          ...entry,
-          track: entry.track || entry.item || null,
-        }))
-        .filter((entry: any) => entry.track);
+      // Fallback: explicitly fetch playlist items via Spotify 2026 `/items` endpoint, then legacy `/tracks`
+      if (normalizedItems.length === 0) {
+        const fallbackUrls = [
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}/items?limit=50&market=ID`,
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}/items?limit=50`,
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}/tracks?limit=50&market=ID`,
+          `https://api.spotify.com/v1/playlists/${encodeURIComponent(cleanId)}/tracks?limit=50`,
+        ];
+
+        for (const url of fallbackUrls) {
+          try {
+            const fallbackRes = await fetch(url, {
+              headers: { Authorization: `Bearer ${accessToken}` },
+              cache: 'no-store',
+            });
+            if (fallbackRes.ok) {
+              const fallbackData = await fallbackRes.json();
+              const rawList =
+                fallbackData.items ||
+                fallbackData.tracks?.items ||
+                (Array.isArray(fallbackData) ? fallbackData : []);
+              const extracted = extractNormalizedItems(rawList);
+              if (extracted.length > 0) {
+                normalizedItems = extracted;
+                break;
+              }
+            }
+          } catch {}
+        }
+      }
 
       return NextResponse.json({
         ...data,

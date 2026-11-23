@@ -949,6 +949,8 @@ export default function Player() {
   const openPlaylist = async (playlistId: string) => {
     if (!playlistId) return;
     setLoadingDetail(true);
+    setPlaylistFilter("");
+    setPlaylistSort("default");
     setActiveTab("playlist");
     try {
       const res = await fetch(`/api/spotify/playlists?id=${encodeURIComponent(playlistId)}`);

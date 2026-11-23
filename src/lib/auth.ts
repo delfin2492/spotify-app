@@ -84,6 +84,9 @@ export const authOptions: AuthOptions = {
           try {
             fs.writeFileSync("/tmp/.spotify-token", account.refresh_token, "utf8");
           } catch {}
+          try {
+            fs.writeFileSync(path.join(process.cwd(), ".spotify-token"), account.refresh_token, "utf8");
+          } catch {}
         }
         tokenCache.expiresAt = (account.expires_at ?? 0) * 1000;
         return {
@@ -114,6 +117,9 @@ export const authOptions: AuthOptions = {
         tokenCache.refreshToken = token.refreshToken;
         try {
           fs.writeFileSync("/tmp/.spotify-token", token.refreshToken, "utf8");
+        } catch {}
+        try {
+          fs.writeFileSync(path.join(process.cwd(), ".spotify-token"), token.refreshToken, "utf8");
         } catch {}
       }
       return session;
