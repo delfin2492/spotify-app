@@ -1286,7 +1286,7 @@ export default function Player() {
       {/* Toast Notification */}
       {toast && (
         <div
-          className={`fixed top-5 right-5 z-50 px-5 py-3 rounded-xl shadow-2xl border text-sm font-semibold flex items-center gap-2.5 transition-all ${
+          className={`fixed top-3 inset-x-3 sm:left-auto sm:top-5 sm:right-5 sm:max-w-md z-[60] px-4 py-3 rounded-xl shadow-2xl border text-xs sm:text-sm font-semibold flex items-center gap-2.5 transition-all ${
             toast.type === "error"
               ? "bg-red-950/95 border-red-500/40 text-red-200"
               : toast.type === "info"
@@ -1294,17 +1294,25 @@ export default function Player() {
               : "bg-emerald-950/95 border-[#1DB954]/50 text-emerald-200"
           }`}
         >
-          <span className="w-2 h-2 rounded-full bg-[#1DB954] animate-pulse" />
-          <span>{toast.message}</span>
+          <span className="w-2 h-2 rounded-full bg-[#1DB954] animate-pulse shrink-0" />
+          <span className="truncate">{toast.message}</span>
         </div>
       )}
 
       {/* Main Workspace (Sidebar + Main View) */}
-      <div className="flex-1 flex overflow-hidden p-2 gap-2">
+      <div className="flex-1 flex overflow-hidden p-0 sm:p-2 gap-0 sm:gap-2 relative">
+        {/* Mobile Sidebar Backdrop */}
+        {mobileMenuOpen && (
+          <div
+            onClick={() => setMobileMenuOpen(false)}
+            className="fixed inset-0 bg-black/75 backdrop-blur-xs z-40 md:hidden"
+          />
+        )}
+
         {/* Left Sidebar */}
         <aside
           className={`${
-            mobileMenuOpen ? "fixed inset-y-0 left-0 z-40 w-72 p-2 bg-black" : "hidden md:flex"
+            mobileMenuOpen ? "fixed inset-y-0 left-0 z-50 w-[80vw] max-w-[300px] p-2 bg-black flex" : "hidden md:flex"
           } md:w-64 lg:w-72 flex-col gap-2 h-full shrink-0`}
         >
           {/* Primary Nav Box */}
@@ -1498,19 +1506,20 @@ export default function Player() {
         </aside>
 
         {/* Main Content View */}
-        <main className="flex-1 bg-gradient-to-b from-[#1e1e24] via-[#121212] to-[#121212] rounded-xl overflow-y-auto flex flex-col relative">
+        <main className="flex-1 bg-gradient-to-b from-[#1e1e24] via-[#121212] to-[#121212] rounded-none sm:rounded-xl overflow-y-auto overflow-x-hidden flex flex-col relative">
           {/* Sticky Top Bar */}
-          <header className="sticky top-0 z-20 backdrop-blur-md bg-[#121212]/75 px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3 border-b border-white/5">
-            <div className="flex items-center gap-3 flex-1 max-w-xl">
+          <header className="sticky top-0 z-20 backdrop-blur-md bg-[#121212]/85 px-3 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-3 border-b border-white/5">
+            <div className="flex items-center gap-2 sm:gap-3 flex-1 max-w-xl min-w-0">
               <button
                 onClick={() => setMobileMenuOpen(true)}
-                className="md:hidden p-2 rounded-lg bg-white/10 text-white"
+                className="md:hidden p-2 rounded-lg bg-white/10 text-white shrink-0"
+                aria-label="Buka Menu"
               >
                 ☰
               </button>
 
               {/* Global Quick Search Input */}
-              <div className="relative flex-1">
+              <div className="relative flex-1 min-w-0">
                 <input
                   type="text"
                   value={searchQuery}
@@ -1521,11 +1530,11 @@ export default function Player() {
                   onFocus={() => {
                     if (searchQuery.trim()) setActiveTab("search");
                   }}
-                  placeholder="Cari lagu, artis, album, genre, atau playlist..."
-                  className="w-full bg-zinc-800/90 hover:bg-zinc-800 focus:bg-zinc-800 text-sm text-white rounded-full py-2.5 pl-10 pr-9 outline-none focus:ring-2 focus:ring-[#1DB954] transition-all"
+                  placeholder="Cari lagu, artis, playlist..."
+                  className="w-full bg-zinc-800/90 hover:bg-zinc-800 focus:bg-zinc-800 text-xs sm:text-sm text-white rounded-full py-2 sm:py-2.5 pl-9 sm:pl-10 pr-8 outline-none focus:ring-2 focus:ring-[#1DB954] transition-all"
                 />
                 <svg
-                  className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2"
+                  className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2"
                   fill="currentColor"
                   viewBox="0 0 24 24"
                 >
@@ -1534,7 +1543,7 @@ export default function Player() {
                 {searchQuery && (
                   <button
                     onClick={() => setSearchQuery("")}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs p-1"
                   >
                     ✕
                   </button>
@@ -1542,7 +1551,7 @@ export default function Player() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
               <span className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-full bg-[#1DB954]/15 text-[#1DB954] border border-[#1DB954]/30">
                 {authMode === "geolab" ? "🔒 Mode PIN: GeoLab" : "👑 Mode Admin"}
               </span>
@@ -1571,7 +1580,7 @@ export default function Player() {
 
               <button
                 onClick={handleLogout}
-                className="text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-full transition-colors cursor-pointer"
+                className="text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-3 sm:px-4 py-2 rounded-full transition-colors cursor-pointer shrink-0"
               >
                 Keluar
               </button>
@@ -1579,42 +1588,49 @@ export default function Player() {
           </header>
 
           {/* Dynamic Body Content */}
-          <div className="p-4 sm:p-6 flex-1">
+          <div className="p-3 sm:p-6 flex-1">
             {/* TAB: HOME */}
             {activeTab === "home" && (
-              <div className="space-y-8">
+              <div className="space-y-6 sm:space-y-8">
                 {/* Spotify Time-of-Day Greeting + Quick Access */}
                 <section>
-                  <h2 className="text-2xl sm:text-3xl font-extrabold mb-4 tracking-tight">
-                    {(() => {
-                      const h = new Date().getHours();
-                      if (h < 11) return "Selamat Pagi";
-                      if (h < 15) return "Selamat Siang";
-                      if (h < 18) return "Selamat Sore";
-                      return "Selamat Malam";
-                    })()}
-                  </h2>
+                  <div className="flex items-center justify-between gap-2 mb-3 sm:mb-4">
+                    <h2 className="text-xl sm:text-3xl font-extrabold tracking-tight">
+                      {(() => {
+                        const h = new Date().getHours();
+                        if (h < 11) return "Selamat Pagi";
+                        if (h < 15) return "Selamat Siang";
+                        if (h < 18) return "Selamat Sore";
+                        return "Selamat Malam";
+                      })()}
+                    </h2>
+                    <span className="lg:hidden inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-[#1DB954]/15 text-[#1DB954] border border-[#1DB954]/30 shrink-0">
+                      {authMode === "geolab" ? "🔒 GeoLab" : "👑 Admin"}
+                    </span>
+                  </div>
 
                   {playlists.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
                       {playlists.slice(0, 6).map((pl) => (
                         <div
                           key={pl.id}
                           onClick={() => openPlaylist(pl.id)}
-                          className="group bg-white/5 hover:bg-white/15 transition-all rounded-lg flex items-center overflow-hidden cursor-pointer pr-3"
+                          className="group bg-white/5 hover:bg-white/15 transition-all rounded-lg flex items-center overflow-hidden cursor-pointer pr-2 sm:pr-3"
                         >
                           <img
                             src={pl.images?.[0]?.url || "https://placehold.co/80x80/27272a/white?text=♪"}
                             alt={pl.name}
-                            className="w-16 h-16 object-cover shrink-0 shadow-md"
+                            className="w-12 h-12 sm:w-16 sm:h-16 object-cover shrink-0 shadow-md"
                           />
-                          <span className="font-bold text-sm px-3.5 truncate flex-1">{pl.name}</span>
+                          <span className="font-bold text-xs sm:text-sm px-2.5 sm:px-3.5 line-clamp-2 sm:truncate flex-1 leading-tight">
+                            {pl.name}
+                          </span>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               playContext(pl.uri);
                             }}
-                            className="w-10 h-10 rounded-full bg-[#1DB954] text-black flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-105 shrink-0 cursor-pointer"
+                            className="hidden sm:flex w-10 h-10 rounded-full bg-[#1DB954] text-black items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-105 shrink-0 cursor-pointer"
                             title="Putar Playlist"
                           >
                             <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
@@ -1630,20 +1646,22 @@ export default function Player() {
                 {/* Top Artists Section (Spotify Round Cards) */}
                 {topArtists.length > 0 && (
                   <section>
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center justify-between mb-3 sm:mb-4">
                       <div>
-                        <h2 className="text-xl font-bold">Artis Teratas Anda</h2>
-                        <p className="text-xs text-zinc-400">Klik artis untuk melihat lagu populer & diskografi album</p>
+                        <h2 className="text-lg sm:text-xl font-bold">Artis Teratas Anda</h2>
+                        <p className="text-[11px] sm:text-xs text-zinc-400">
+                          Klik artis untuk melihat lagu populer & diskografi album
+                        </p>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                    <div className="grid grid-cols-3 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-4">
                       {topArtists.slice(0, 6).map((artist) => (
                         <div
                           key={artist.id}
                           onClick={() => openArtist(artist.id)}
-                          className="bg-[#181818] hover:bg-[#282828] transition-all p-4 rounded-xl group cursor-pointer flex flex-col items-center text-center"
+                          className="bg-[#181818] hover:bg-[#282828] transition-all p-2.5 sm:p-4 rounded-xl group cursor-pointer flex flex-col items-center text-center"
                         >
-                          <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full overflow-hidden mb-3 shadow-xl">
+                          <div className="relative w-16 h-16 sm:w-32 sm:h-32 rounded-full overflow-hidden mb-2 sm:mb-3 shadow-xl">
                             <img
                               src={artist.images?.[0]?.url || "https://placehold.co/200x200/27272a/white?text=Artis"}
                               alt={artist.name}
@@ -1654,7 +1672,7 @@ export default function Player() {
                                 e.stopPropagation();
                                 playContext(artist.uri);
                               }}
-                              className="absolute bottom-1.5 right-1.5 w-10 h-10 rounded-full bg-[#1DB954] text-black flex items-center justify-center opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-xl hover:scale-105 cursor-pointer"
+                              className="hidden sm:flex absolute bottom-1.5 right-1.5 w-10 h-10 rounded-full bg-[#1DB954] text-black items-center justify-center opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-xl hover:scale-105 cursor-pointer"
                               title={`Putar lagu ${artist.name}`}
                             >
                               <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
@@ -1662,8 +1680,8 @@ export default function Player() {
                               </svg>
                             </button>
                           </div>
-                          <h3 className="font-bold text-sm truncate w-full text-white">{artist.name}</h3>
-                          <p className="text-[11px] text-zinc-400 mt-0.5">Artis</p>
+                          <h3 className="font-bold text-xs sm:text-sm truncate w-full text-white">{artist.name}</h3>
+                          <p className="text-[10px] sm:text-[11px] text-zinc-400 mt-0.5">Artis</p>
                         </div>
                       ))}
                     </div>
@@ -1672,20 +1690,22 @@ export default function Player() {
 
                 {/* Top Tracks Section */}
                 <section>
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center justify-between mb-3 sm:mb-4">
                     <div>
-                      <h2 className="text-xl font-bold">Lagu Teratas Anda</h2>
-                      <p className="text-xs text-zinc-400">Klik lagu untuk langsung memutar atau tambahkan ke antrean/playlist</p>
+                      <h2 className="text-lg sm:text-xl font-bold">Lagu Teratas Anda</h2>
+                      <p className="text-[11px] sm:text-xs text-zinc-400">
+                        Klik lagu untuk langsung memutar atau tambahkan ke antrean/playlist
+                      </p>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2.5 sm:gap-4">
                     {topTracks.map((track) => (
                       <div
                         key={track.id}
-                        className="bg-[#181818] hover:bg-[#282828] transition-all p-3.5 rounded-xl group flex flex-col justify-between"
+                        className="bg-[#181818] hover:bg-[#282828] transition-all p-2.5 sm:p-3.5 rounded-xl group flex flex-col justify-between min-w-0"
                       >
-                        <div>
-                          <div className="relative aspect-square rounded-lg overflow-hidden mb-3 shadow-lg">
+                        <div className="min-w-0">
+                          <div className="relative aspect-square rounded-lg overflow-hidden mb-2.5 sm:mb-3 shadow-lg">
                             <img
                               src={track.album?.images?.[0]?.url || ""}
                               alt={track.name}
@@ -1694,47 +1714,47 @@ export default function Player() {
                             />
                             <button
                               onClick={() => playTrack(track.uri)}
-                              className="absolute bottom-2 right-2 w-11 h-11 rounded-full bg-[#1DB954] text-black flex items-center justify-center opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-xl hover:scale-105 cursor-pointer"
+                              className="absolute bottom-2 right-2 w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-[#1DB954] text-black flex items-center justify-center sm:opacity-0 sm:translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all shadow-xl hover:scale-105 cursor-pointer"
                               title="Putar Sekarang"
                             >
-                              <svg className="w-5 h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
+                              <svg className="w-4 h-4 sm:w-5 sm:h-5 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
                                 <path d="M8 5v14l11-7z" />
                               </svg>
                             </button>
                           </div>
                           <h3
                             onClick={() => playTrack(track.uri)}
-                            className="font-semibold text-sm truncate text-white hover:underline cursor-pointer"
+                            className="font-semibold text-xs sm:text-sm truncate text-white hover:underline cursor-pointer"
                             title={track.name}
                           >
                             {track.name}
                           </h3>
                           <p
                             onClick={() => track.artists?.[0]?.id && openArtist(track.artists[0].id)}
-                            className="text-xs text-zinc-400 hover:text-white hover:underline truncate mt-0.5 cursor-pointer"
+                            className="text-[11px] sm:text-xs text-zinc-400 hover:text-white hover:underline truncate mt-0.5 cursor-pointer"
                           >
                             {track.artists?.map((a: any) => a.name).join(", ")}
                           </p>
                         </div>
 
-                        <div className="flex items-center justify-between gap-1 mt-3 pt-2 border-t border-white/5">
+                        <div className="grid grid-cols-2 sm:flex sm:flex-wrap sm:items-center sm:justify-between gap-1 mt-2.5 sm:mt-3 pt-2 border-t border-white/5">
                           <button
                             onClick={() => handleAddToQueue(track, "top")}
-                            className="text-[11px] text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 px-2 py-1 rounded transition-colors cursor-pointer"
+                            className="text-[10px] sm:text-[11px] text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-1.5 sm:px-2 py-1 rounded transition-colors cursor-pointer truncate text-center"
                             title="Putar Berikutnya (Sisipkan di posisi #1 antrean)"
                           >
                             ⏭ Berikutnya
                           </button>
                           <button
                             onClick={() => handleAddToQueue(track, "bottom")}
-                            className="text-[11px] text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 px-2 py-1 rounded transition-colors cursor-pointer"
+                            className="text-[10px] sm:text-[11px] text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-1.5 sm:px-2 py-1 rounded transition-colors cursor-pointer truncate text-center"
                             title="Tambah ke Antrean Paling Bawah"
                           >
                             + Antrean
                           </button>
                           <button
                             onClick={() => setTrackToAdd(track)}
-                            className="text-[11px] text-[#1DB954] hover:bg-[#1DB954]/10 px-2 py-1 rounded transition-colors cursor-pointer"
+                            className="col-span-2 sm:col-span-1 text-[10px] sm:text-[11px] font-semibold text-[#1DB954] bg-[#1DB954]/10 hover:bg-[#1DB954]/20 px-1.5 sm:px-2 py-1 rounded transition-colors cursor-pointer truncate text-center"
                             title="Tambah ke Playlist"
                           >
                             + Playlist
@@ -2240,23 +2260,23 @@ export default function Player() {
 
             {/* TAB: PLAYLIST DETAIL */}
             {activeTab === "playlist" && (
-              <div className="space-y-6">
+              <div className="space-y-5 sm:space-y-6">
                 {loadingDetail ? (
                   <div className="py-16 text-center text-zinc-400 animate-pulse">Memuat isi playlist...</div>
                 ) : selectedPlaylist ? (
                   <>
-                    <div className="flex flex-col sm:flex-row sm:items-end gap-5 bg-white/[0.03] p-5 rounded-2xl border border-white/5">
+                    <div className="flex flex-col sm:flex-row items-center sm:items-end text-center sm:text-left gap-4 sm:gap-5 bg-white/[0.03] p-4 sm:p-5 rounded-2xl border border-white/5">
                       <img
                         src={
                           selectedPlaylist.images?.[0]?.url ||
                           "https://placehold.co/200x200/27272a/white?text=Playlist"
                         }
                         alt={selectedPlaylist.name}
-                        className="w-32 h-32 sm:w-40 sm:h-40 rounded-xl object-cover shadow-2xl shrink-0"
+                        className="w-28 h-28 sm:w-40 sm:h-40 rounded-xl object-cover shadow-2xl shrink-0"
                       />
-                      <div className="flex-1 min-w-0">
+                      <div className="flex-1 min-w-0 w-full">
                         <span className="text-xs font-bold uppercase tracking-wider text-[#1DB954]">Playlist</span>
-                        <h2 className="text-2xl sm:text-4xl font-extrabold truncate mt-1">
+                        <h2 className="text-xl sm:text-4xl font-extrabold truncate mt-1">
                           {selectedPlaylist.name}
                         </h2>
                         {selectedPlaylist.description && (
@@ -2270,7 +2290,7 @@ export default function Player() {
                           {selectedPlaylist.tracks?.total || 0} lagu
                         </p>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2.5">
+                      <div className="flex flex-wrap items-center justify-center sm:justify-end gap-2 w-full sm:w-auto">
                         <button
                           onClick={() =>
                             playContext(
@@ -2278,13 +2298,13 @@ export default function Player() {
                               (selectedPlaylist.tracks?.items || []).map((i: any) => i.track).filter(Boolean)
                             )
                           }
-                          className="bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold px-6 py-3 rounded-full shadow-lg transition-transform hover:scale-105 cursor-pointer"
+                          className="flex-1 sm:flex-initial bg-[#1DB954] hover:bg-[#1ed760] text-black font-bold px-5 sm:px-6 py-2.5 sm:py-3 rounded-full shadow-lg transition-transform hover:scale-105 cursor-pointer text-xs sm:text-sm"
                         >
                           ▶ Putar Playlist
                         </button>
                         <button
                           onClick={() => setActiveTab("search")}
-                          className="bg-white/10 hover:bg-white/20 text-white text-xs font-semibold px-4 py-3 rounded-full transition-colors cursor-pointer"
+                          className="bg-white/10 hover:bg-white/20 text-white text-xs font-semibold px-4 py-2.5 sm:py-3 rounded-full transition-colors cursor-pointer"
                         >
                           + Tambah Lagu
                         </button>
@@ -3254,49 +3274,106 @@ export default function Player() {
       )}
 
       {/* Persistent Bottom Player Bar */}
-      <footer className="h-24 bg-[#09090b] border-t border-white/10 px-4 sm:px-6 flex items-center justify-between gap-4 z-30">
-        {/* Left: Current Track Info */}
-        <div className="flex items-center gap-3.5 min-w-0 w-1/4">
-          {data?.albumImageUrl ? (
-            <img
-              src={data.albumImageUrl}
-              alt={data.album}
-              onClick={() => setActiveTab("focus")}
-              className="w-14 h-14 rounded-lg object-cover shadow-md cursor-pointer hover:opacity-80 transition-opacity shrink-0"
-            />
-          ) : (
-            <div className="w-14 h-14 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-500 shrink-0">
-              ♪
+      <footer className="h-auto sm:h-24 bg-[#09090b] border-t border-white/10 px-3 sm:px-6 py-2 sm:py-0 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 sm:gap-4 z-30">
+        {/* Top Row on Mobile / Left Column on Desktop: Current Track Info + Mobile Quick Controls */}
+        <div className="flex items-center justify-between gap-2 sm:gap-3.5 min-w-0 w-full sm:w-1/4">
+          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0 flex-1">
+            {data?.albumImageUrl ? (
+              <img
+                src={data.albumImageUrl}
+                alt={data.album}
+                onClick={() => setActiveTab("focus")}
+                className="w-11 h-11 sm:w-14 sm:h-14 rounded-lg object-cover shadow-md cursor-pointer hover:opacity-80 transition-opacity shrink-0"
+              />
+            ) : (
+              <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-500 shrink-0">
+                ♪
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p
+                onClick={() => (data?.albumId ? openAlbum(data.albumId) : setActiveTab("focus"))}
+                className="text-xs sm:text-sm font-bold text-white truncate hover:underline cursor-pointer"
+              >
+                {data?.title || "Belum ada lagu diputar"}
+              </p>
+              <p
+                onClick={() => data?.artistId && openArtist(data.artistId)}
+                className="text-[11px] sm:text-xs text-zinc-400 hover:text-white hover:underline truncate cursor-pointer"
+              >
+                {data?.artist || "Pilih lagu untuk mulai memutar"}
+              </p>
             </div>
-          )}
-          <div className="min-w-0 flex-1">
-            <p
-              onClick={() => (data?.albumId ? openAlbum(data.albumId) : setActiveTab("focus"))}
-              className="text-sm font-bold text-white truncate hover:underline cursor-pointer"
-            >
-              {data?.title || "Belum ada lagu diputar"}
-            </p>
-            <p
-              onClick={() => data?.artistId && openArtist(data.artistId)}
-              className="text-xs text-zinc-400 hover:text-white hover:underline truncate cursor-pointer"
-            >
-              {data?.artist || "Pilih lagu untuk mulai memutar"}
-            </p>
+            {data?.trackId && (
+              <button
+                onClick={() => handleToggleLike(data.trackId!, "save")}
+                className="text-zinc-400 hover:text-[#1DB954] transition-colors p-1.5 cursor-pointer hidden sm:block"
+                title="Simpan ke Lagu yang Disukai"
+              >
+                ♥
+              </button>
+            )}
           </div>
-          {data?.trackId && (
+
+          {/* Mobile-Only Compact Transport Controls */}
+          <div className="flex sm:hidden items-center gap-1.5 shrink-0">
             <button
-              onClick={() => handleToggleLike(data.trackId!, "save")}
-              className="text-zinc-400 hover:text-[#1DB954] transition-colors p-1.5 cursor-pointer hidden sm:block"
-              title="Simpan ke Lagu yang Disukai"
+              onClick={() => handleControl("previous")}
+              className="p-1.5 text-zinc-300 hover:text-white cursor-pointer"
+              title="Sebelumnya"
             >
-              ♥
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" />
+              </svg>
             </button>
-          )}
+            <button
+              onClick={() => handleControl(data?.isPlaying ? "pause" : "play")}
+              className="w-9 h-9 bg-white text-black rounded-full flex items-center justify-center shadow-md cursor-pointer"
+              title={data?.isPlaying ? "Pause" : "Play"}
+            >
+              {data?.isPlaying ? (
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              )}
+            </button>
+            <button
+              onClick={() => {
+                handleControl("next", {
+                  queueUris: queueData.queue.map((item) => item?.uri).filter(Boolean),
+                });
+              }}
+              className="p-1.5 text-zinc-300 hover:text-white cursor-pointer"
+              title="Selanjutnya"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+              </svg>
+            </button>
+            <button
+              onClick={() => {
+                fetchDevices();
+                setShowDevicesMenu((prev) => !prev);
+              }}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                showDevicesMenu ? "text-[#1DB954] bg-white/10" : "text-zinc-400 hover:text-white"
+              }`}
+              title="Pilih Perangkat"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M4 6h18V4H4c-1.1 0-2 .9-2 2v11H0v3h14v-3H4V6zm19 2h-6c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V9c0-.55-.45-1-1-1zm-1 9h-4v-7h4v7z" />
+              </svg>
+            </button>
+          </div>
         </div>
 
-        {/* Center: Playback Controls + Seek Bar */}
-        <div className="flex flex-col items-center max-w-xl w-2/4">
-          <div className="flex items-center gap-5 mb-2">
+        {/* Center: Desktop Playback Controls + Responsive Seek Bar */}
+        <div className="flex flex-col items-center max-w-xl w-full sm:w-2/4">
+          <div className="hidden sm:flex items-center gap-5 mb-2">
             {/* Shuffle Button */}
             <button
               onClick={() => handleControl("shuffle", { value: !data?.shuffleState })}
@@ -3375,8 +3452,8 @@ export default function Player() {
           </div>
 
           {/* Seek Bar */}
-          <div className="w-full flex items-center gap-2.5">
-            <span className="text-[11px] text-zinc-400 w-9 text-right font-mono">
+          <div className="w-full flex items-center gap-2 sm:gap-2.5">
+            <span className="text-[10px] sm:text-[11px] text-zinc-400 w-7 sm:w-9 text-right font-mono">
               {formatTime(localProgress)}
             </span>
             <input
@@ -3409,21 +3486,21 @@ export default function Player() {
                 setIsSeeking(false);
                 handleControl("seek", { value: val });
               }}
-              className={`flex-1 h-1.5 rounded-lg appearance-none ${
+              className={`flex-1 h-1 sm:h-1.5 rounded-lg appearance-none ${
                 authMode === "geolab"
                   ? "bg-zinc-800 cursor-not-allowed accent-zinc-600 opacity-50"
                   : "bg-zinc-700 cursor-pointer accent-[#1DB954]"
               }`}
               title={authMode === "geolab" ? "🔒 Posisi menit lagu dikendalikan oleh Host" : "Atur menit pemutaran lagu"}
             />
-            <span className="text-[11px] text-zinc-400 w-9 font-mono">
+            <span className="text-[10px] sm:text-[11px] text-zinc-400 w-7 sm:w-9 font-mono">
               {formatTime(data?.durationMs || 0)}
             </span>
           </div>
         </div>
 
         {/* Right: Now Playing Panel, Lyrics, Queue, Device Selector & Volume */}
-        <div className="flex items-center justify-end gap-1.5 sm:gap-2.5 w-1/4 relative">
+        <div className="hidden sm:flex items-center justify-end gap-1.5 sm:gap-2.5 w-1/4 relative">
           {/* Toggle Right Now Playing Sidebar (Spotify Desktop Icon) */}
           <button
             onClick={() =>
@@ -3590,7 +3667,148 @@ export default function Player() {
             />
           </div>
         </div>
+
+        {/* Mobile Device Picker Dropdown (when triggered from mobile mini-player) */}
+        {showDevicesMenu && (
+          <div className="sm:hidden fixed bottom-28 right-3 left-3 bg-zinc-900 border border-white/10 rounded-xl shadow-2xl p-3 z-50">
+            <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
+              <span className="text-xs font-bold text-white">Pilih Perangkat Spotify</span>
+              <button
+                onClick={() => setShowDevicesMenu(false)}
+                className="text-xs text-zinc-400 hover:text-white px-1"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {webPlayerDeviceId && (
+                <button
+                  onClick={() => {
+                    handleControl("transfer", { deviceId: webPlayerDeviceId });
+                    setShowDevicesMenu(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between cursor-pointer ${
+                    data?.device?.id === webPlayerDeviceId
+                      ? "bg-[#1DB954]/20 text-[#1DB954] font-bold"
+                      : "hover:bg-white/5 text-zinc-200"
+                  }`}
+                >
+                  <span>🌐 Vantara Web Browser</span>
+                  {data?.device?.id === webPlayerDeviceId && <span>Aktif</span>}
+                </button>
+              )}
+              {devices
+                .filter((d) => d.id !== webPlayerDeviceId)
+                .map((dev) => (
+                  <button
+                    key={dev.id}
+                    onClick={() => {
+                      handleControl("transfer", { deviceId: dev.id });
+                      setShowDevicesMenu(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between cursor-pointer ${
+                      dev.is_active
+                        ? "bg-[#1DB954]/20 text-[#1DB954] font-bold"
+                        : "hover:bg-white/5 text-zinc-200"
+                    }`}
+                  >
+                    <span className="truncate">
+                      {dev.type === "Smartphone" ? "📱" : "💻"} {dev.name}
+                    </span>
+                    {dev.is_active && <span>Aktif</span>}
+                  </button>
+                ))}
+              {devices.length === 0 && !webPlayerDeviceId && (
+                <p className="text-[11px] text-zinc-400 py-2 text-center">
+                  Buka aplikasi Spotify di HP/PC atau tunggu Web Player aktif.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </footer>
+
+      {/* Mobile Bottom Navigation Bar (Spotify App Style) */}
+      <nav className="md:hidden bg-[#09090b] border-t border-white/10 px-2 py-1.5 grid grid-cols-5 gap-1 z-30 shrink-0">
+        <button
+          onClick={() => {
+            setActiveTab("home");
+            setMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer ${
+            activeTab === "home" ? "text-[#1DB954]" : "text-zinc-400 hover:text-white"
+          }`}
+        >
+          <svg className="w-5 h-5 mb-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 3l9 8h-3v9h-5v-6H11v6H6v-9H3l9-8z" />
+          </svg>
+          <span>Beranda</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab("search");
+            setMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer ${
+            activeTab === "search" ? "text-[#1DB954]" : "text-zinc-400 hover:text-white"
+          }`}
+        >
+          <svg className="w-5 h-5 mb-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+          </svg>
+          <span>Cari</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab("queue");
+            setMobileMenuOpen(false);
+          }}
+          className={`relative flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer ${
+            activeTab === "queue" ? "text-[#1DB954]" : "text-zinc-400 hover:text-white"
+          }`}
+        >
+          <div className="relative">
+            <svg className="w-5 h-5 mb-0.5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z" />
+            </svg>
+            {queueData.queue.length > 0 && (
+              <span className="absolute -top-1 -right-2.5 text-[9px] bg-[#1DB954] text-black font-black rounded-full px-1 leading-tight">
+                {queueData.queue.length}
+              </span>
+            )}
+          </div>
+          <span>Antrean</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab("lyrics");
+            setMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer ${
+            activeTab === "lyrics" ? "text-[#1DB954]" : "text-zinc-400 hover:text-white"
+          }`}
+        >
+          <svg className="w-5 h-5 mb-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20H9c-.55 0-1 .45-1 1s.45 1 1 1h6c.55 0 1-.45 1-1s-.45-1-1-1h-2v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+          </svg>
+          <span>Lirik</span>
+        </button>
+
+        <button
+          onClick={() => setMobileMenuOpen((prev) => !prev)}
+          className={`flex flex-col items-center justify-center py-1 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer ${
+            mobileMenuOpen || activeTab === "playlist" ? "text-[#1DB954]" : "text-zinc-400 hover:text-white"
+          }`}
+        >
+          <svg className="w-5 h-5 mb-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z" />
+          </svg>
+          <span>Playlist</span>
+        </button>
+      </nav>
 
       {/* FULLSCREEN LYRICS VIEW (Karaoke Mode - Spotify Style) */}
       {isFullscreenLyrics && (
@@ -3911,13 +4129,13 @@ function TrackRow({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
-      className={`flex items-center justify-between gap-3 px-3 sm:px-4 py-2.5 hover:bg-white/[0.06] transition-all group ${
+      className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-white/[0.06] transition-all group ${
         isCurrent ? "bg-[#1DB954]/10" : ""
       } ${isDragging ? "opacity-35 scale-[0.99] border-dashed border border-[#1DB954] bg-[#1DB954]/5" : ""} ${
         isDropTarget ? "border-t-2 border-[#1DB954] bg-[#1DB954]/10" : ""
       }`}
     >
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+      <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 w-full">
         {isDraggable && (
           <div
             className="cursor-grab active:cursor-grabbing text-zinc-500 hover:text-white p-1 select-none flex items-center justify-center shrink-0"
@@ -3930,7 +4148,7 @@ function TrackRow({
         )}
         <button
           onClick={onPlay}
-          className="w-6 text-center text-xs text-zinc-400 group-hover:text-white font-mono shrink-0 cursor-pointer"
+          className="w-5 sm:w-6 text-center text-xs text-zinc-400 group-hover:text-white font-mono shrink-0 cursor-pointer"
           title="Putar Lagu"
         >
           <span className="group-hover:hidden">{isCurrent ? "▶" : index}</span>
@@ -3949,13 +4167,13 @@ function TrackRow({
         <div className="min-w-0 flex-1">
           <p
             onClick={onPlay}
-            className={`text-sm font-semibold truncate cursor-pointer hover:underline ${
+            className={`text-xs sm:text-sm font-semibold truncate cursor-pointer hover:underline ${
               isCurrent ? "text-[#1DB954]" : "text-white"
             }`}
           >
             {track.name}
           </p>
-          <div className="text-xs text-zinc-400 truncate flex items-center gap-1">
+          <div className="text-[11px] sm:text-xs text-zinc-400 truncate flex items-center gap-1">
             <span
               onClick={() => {
                 const firstArtistId = track.artists?.[0]?.id;
@@ -3971,14 +4189,14 @@ function TrackRow({
             </span>
             {track.album?.name && (
               <>
-                <span>•</span>
+                <span className="hidden sm:inline">•</span>
                 <span
                   onClick={() => {
                     if (track.album?.id && onAlbumClick) {
                       onAlbumClick(track.album.id);
                     }
                   }}
-                  className="hover:text-white hover:underline cursor-pointer truncate"
+                  className="hidden sm:inline hover:text-white hover:underline cursor-pointer truncate"
                 >
                   {track.album.name}
                 </span>
@@ -3986,11 +4204,15 @@ function TrackRow({
             )}
           </div>
         </div>
+
+        <span className="text-[11px] text-zinc-500 font-mono shrink-0 sm:hidden">
+          {formatTime(track.duration_ms || 0)}
+        </span>
       </div>
 
-      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+      <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 w-full sm:w-auto pl-7 sm:pl-0 pt-1 sm:pt-0 border-t border-white/[0.04] sm:border-t-0 shrink-0">
         {(onMoveUp || onMoveDown) && (
-          <div className="flex items-center gap-1 mr-1">
+          <div className="flex items-center gap-1 mr-auto sm:mr-1">
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -4035,7 +4257,7 @@ function TrackRow({
         {onPlayNext && (
           <button
             onClick={onPlayNext}
-            className="text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+            className="text-[10px] sm:text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2 sm:px-2.5 py-1 rounded-full transition-colors cursor-pointer"
             title="Putar Berikutnya (Sisipkan di posisi #1 antrean berikutnya)"
           >
             ⏭ Berikutnya
@@ -4043,14 +4265,14 @@ function TrackRow({
         )}
         <button
           onClick={onQueue}
-          className="text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+          className="text-[10px] sm:text-[11px] font-medium text-zinc-300 hover:text-white bg-white/5 hover:bg-white/10 px-2 sm:px-2.5 py-1 rounded-full transition-colors cursor-pointer"
           title="Tambah ke Antrean (Masukkan di posisi paling bawah antrean)"
         >
           + Antrean
         </button>
         <button
           onClick={onAddToPlaylist}
-          className="text-[11px] font-medium text-[#1DB954] bg-[#1DB954]/10 hover:bg-[#1DB954]/20 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+          className="text-[10px] sm:text-[11px] font-medium text-[#1DB954] bg-[#1DB954]/10 hover:bg-[#1DB954]/20 px-2 sm:px-2.5 py-1 rounded-full transition-colors cursor-pointer"
           title="Tambahkan ke Playlist"
         >
           + Playlist
@@ -4058,7 +4280,7 @@ function TrackRow({
         {onRemove && (
           <button
             onClick={onRemove}
-            className="text-[11px] font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 px-2.5 py-1 rounded-full transition-colors cursor-pointer"
+            className="text-[10px] sm:text-[11px] font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 px-2 sm:px-2.5 py-1 rounded-full transition-colors cursor-pointer"
             title="Hapus lagu ini"
           >
             {removeLabel || "Hapus"}
